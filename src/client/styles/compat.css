@@ -1,0 +1,10 @@
+/* 兼容覆盖只组合上游 token，不改写设计源。 */
+.langbar>select,.langbar>.swap{height:var(--ek-control-h);min-height:var(--ek-control-h)}
+/* box-shadow 保留 2.5px，绕开 Chromium outline 的整数量化。 */
+:focus-visible{outline:var(--ek-border-w) solid var(--ek-focus);outline-offset:2px;box-shadow:0 0 0 var(--ek-border-w) var(--ek-focus)}
+/* 错误标题与已译标签使用实底和主文字色，避免半透明合成使对比度下降。 */
+.state.bad{background:var(--ek-bg-surface);color:var(--ek-text)}
+.state.bad strong{color:var(--ek-text)}
+.tag{background:var(--ek-bg-surface);color:var(--ek-text)}
+.state.bad>.icon{color:var(--ek-error)}
+.panel-content .state:not(.bad){color:var(--ek-text)}

@@ -1,0 +1,46 @@
+{
+  "name": "ekko-tools",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Ekko Studio 可扩展工具插件：翻译、多账号统一收发件箱与 RSS 阅读",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "install": "node scripts/install-check.mjs",
+    "build": "node scripts/build.mjs",
+    "lint": "tsc --noEmit && node scripts/check.mjs",
+    "harness:check": "node scripts/plugin-harness.mjs check",
+    "test": "vitest run --coverage",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "security:scan": "node scripts/security-scan.mjs",
+    "audit:production": "npm.cmd audit --omit=dev --registry=https://registry.npmjs.org --json",
+    "install:deps": "npm ci --ignore-scripts"
+  },
+  "dependencies": {
+    "@mozilla/readability": "0.6.0",
+    "feedsmith": "3.1.0",
+    "imapflow": "1.7.8",
+    "linkedom": "0.18.15",
+    "mailparser": "3.14.3",
+    "nodemailer": "10.5.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "sanitize-html": "2.18.2"
+  },
+  "devDependencies": {
+    "@testing-library/react": "16.3.0",
+    "@types/mailparser": "3.4.6",
+    "@types/node": "22.19.1",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@types/sanitize-html": "2.16.0",
+    "@vitest/coverage-v8": "3.2.7",
+    "esbuild": "0.25.12",
+    "jsdom": "26.1.0",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  }
+}

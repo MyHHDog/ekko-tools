@@ -1,0 +1,1500 @@
+{
+  "schemaVersion": 1,
+  "description": "ekko-tools 侧栏翻译与只读统一收件箱：跨边界 RPC、事件与持久化结构契约；密钥只入 vault，前端只收 configured 标记。",
+  "models": {
+    "errorInfo": {
+      "type": "object",
+      "description": "统一错误信息；message 为用户可读中文，不含任何凭据或邮件正文。",
+      "properties": {
+        "code": { "type": "string", "description": "错误码，取自 ErrorCode 枚举（NETWORK_UNREACHABLE/TIMEOUT/AUTH_FAILED 等 15 个）。" },
+        "message": { "type": "string", "description": "用户可读的中文错误说明。", "maxLength": 300 },
+        "retryable": { "type": "boolean", "description": "是否允许自动/手动重试。" },
+        "accountId": { "type": "string", "description": "可选：出错账号 ID，用于列表部分失败标记。", "maxLength": 64 },
+        "category": { "type": "string", "description": "可选：错误类别，用于诊断分组。", "enum": ["configuration", "network", "authentication", "provider", "parse", "internal"] }
+      },
+      "required": ["code", "message", "retryable"],
+      "additionalProperties": false
+    },
+    "connectionState": {
+      "type": "object",
+      "description": "账号连接状态；status 决定其余字段（联合类型的承载形式）。",
+      "properties": {
+        "status": { "type": "string", "enum": ["connecting", "connected", "auth_failed", "offline"], "description": "连接状态。" },
+        "checkedAt": { "type": "number", "description": "connected 时：最近一次成功检查的毫秒时间戳。" },
+        "error": {
+          "type": "object",
+          "description": "auth_failed/offline 时的错误信息（errorInfo 结构，字段含义见 errorInfo 模型）。",
+          "properties": {
+            "code": { "type": "string", "description": "错误码。" },
+            "message": { "type": "string", "description": "用户可读中文说明。", "maxLength": 300 },
+            "retryable": { "type": "boolean", "description": "是否允许重试。" },
+            "accountId": { "type": "string", "description": "可选：出错账号 ID。", "maxLength": 64 },
+            "category": { "type": "string", "description": "可选：错误类别。" }
+          },
+          "required": ["code", "message", "retryable"],
+          "additionalProperties": false
+        },
+        "nextRetryAt": { "type": "number", "description": "offline 时：下次重试时间戳。" }
+      },
+      "required": ["status"],
+      "additionalProperties": false
+    },
+    "account": {
+      "type": "object",
+      "description": "邮箱账号元数据；绝不包含授权码/应用密码等 secret 字段。",
+      "properties": {
+        "id": { "type": "string", "description": "账号随机 UUID。", "maxLength": 64 },
+        "provider": { "type": "string", "enum": ["163", "qq", "gmail", "custom"], "description": "邮箱服务商标识；custom 使用自建 IMAP/SMTP。" },
+        "address": { "type": "string", "description": "邮箱地址；展示可脱敏。", "maxLength": 254 },
+        "alias": { "type": "string", "description": "来源标记简称，≤6 字。", "maxLength": 24 },
+        "colorToken": { "type": "string", "enum": ["a1", "a2", "a3", "a4", "a5", "a6"], "description": "来源色标记，映射宿主变量而非色值。" },
+        "username": { "type": "string", "description": "可选：IMAP/SMTP 登录名，缺省使用邮箱地址。", "maxLength": 254 },
+        "imap": {
+          "type": "object",
+          "description": "可选：自建邮箱 IMAP 服务器。",
+          "properties": {
+            "host": { "type": "string", "description": "IMAP 主机名。", "minLength": 1, "maxLength": 253 },
+            "port": { "type": "integer", "description": "IMAP 端口。", "minimum": 1, "maximum": 65535 },
+            "secure": { "type": "boolean", "description": "true 使用 TLS，false 使用 STARTTLS。" }
+          },
+          "required": ["host", "port", "secure"],
+          "additionalProperties": false
+        },
+        "smtp": {
+          "type": "object",
+          "description": "可选：自建邮箱 SMTP 服务器。",
+          "properties": {
+            "host": { "type": "string", "description": "SMTP 主机名。", "minLength": 1, "maxLength": 253 },
+            "port": { "type": "integer", "description": "SMTP 端口。", "minimum": 1, "maximum": 65535 },
+            "secure": { "type": "boolean", "description": "true 使用 TLS，false 使用 STARTTLS。" }
+          },
+          "required": ["host", "port", "secure"],
+          "additionalProperties": false
+        },
+        "state": {
+          "type": "object",
+          "description": "当前连接状态（connectionState 结构，字段含义见 connectionState 模型）。",
+          "properties": {
+            "status": { "type": "string", "enum": ["connecting", "connected", "auth_failed", "offline"], "description": "连接状态。" },
+            "checkedAt": { "type": "number", "description": "connected 时的时间戳。" },
+            "error": {
+              "type": "object",
+              "description": "失败时的 errorInfo 结构。",
+              "properties": {
+                "code": { "type": "string", "description": "错误码。" },
+                "message": { "type": "string", "description": "用户可读说明。", "maxLength": 300 },
+                "retryable": { "type": "boolean", "description": "是否允许重试。" },
+                "accountId": { "type": "string", "description": "可选：账号 ID。", "maxLength": 64 },
+                "category": { "type": "string", "description": "可选：错误类别。" }
+              },
+              "required": ["code", "message", "retryable"],
+              "additionalProperties": false
+            },
+            "nextRetryAt": { "type": "number", "description": "offline 时的时间戳。" }
+          },
+          "required": ["status"],
+          "additionalProperties": false
+        },
+        "createdAt": { "type": "number", "description": "添加时间毫秒时间戳。" }
+      },
+      "required": ["id", "provider", "address", "alias", "colorToken", "state", "createdAt"],
+      "additionalProperties": false
+    },
+    "noInput": {
+      "type": "null",
+      "description": "无参数请求；前端省略 RPC input 时宿主传入 null。"
+    },
+    "providerInfo": {
+      "type": "object",
+      "description": "翻译 Provider 概览；configured 表示凭据已保存，不回传明文。",
+      "properties": {
+        "id": { "type": "string", "enum": ["baidu", "deepl", "hostModel", "openai"], "description": "Provider 标识。" },
+        "configured": { "type": "boolean", "description": "凭据是否已配置。" }
+      },
+      "required": ["id", "configured"],
+      "additionalProperties": false
+    },
+    "providerTestInput": {
+      "type": "object",
+      "description": "测试翻译服务连接；会向所选服务发送一条短测试文本，不写入历史或缓存。",
+      "properties": {
+        "provider": { "type": "string", "enum": ["baidu", "deepl", "hostModel", "openai"], "description": "可选：要测试的 Provider；缺省按设置选择。" },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "providerTestResult": {
+      "type": "object",
+      "description": "连接测试结果；失败通过 error 描述，不抛出 RPC 错误。",
+      "properties": {
+        "provider": { "type": "string", "enum": ["baidu", "deepl", "hostModel", "openai"], "description": "被测 Provider。" },
+        "configured": { "type": "boolean", "description": "凭据与必要配置是否完整。" },
+        "ok": { "type": "boolean", "description": "测试文本是否成功翻译。" },
+        "latencyMs": { "type": "number", "description": "测试耗时毫秒。" },
+        "sample": { "type": "string", "description": "可选：成功时的译文样例，最多 200 字符。", "maxLength": 200 },
+        "error": {
+          "type": "object",
+          "description": "可选：失败时的 errorInfo 结构（见 errorInfo 模型）。",
+          "properties": {
+            "code": { "type": "string", "description": "错误码。" },
+            "message": { "type": "string", "description": "用户可读说明。", "maxLength": 300 },
+            "retryable": { "type": "boolean", "description": "是否允许重试。" },
+            "accountId": { "type": "string", "description": "可选：账号 ID。", "maxLength": 64 },
+            "category": { "type": "string", "description": "可选：错误类别。" }
+          },
+          "required": ["code", "message", "retryable"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["provider", "configured", "ok", "latencyMs"],
+      "additionalProperties": false
+    },
+    "cacheStats": {
+      "type": "object",
+      "description": "翻译缓存统计；条目按用户/Profile 分区，最多 100 条或 512KB。",
+      "properties": {
+        "entries": { "type": "integer", "description": "当前缓存条目数。", "minimum": 0 },
+        "bytes": { "type": "integer", "description": "当前缓存 JSON 字节数。", "minimum": 0 },
+        "oldestAt": { "type": "number", "description": "可选：最早条目写入时间戳。" },
+        "newestAt": { "type": "number", "description": "可选：最新条目写入时间戳。" },
+        "cleared": { "type": "integer", "description": "可选：清理操作删除的条目数。", "minimum": 0 }
+      },
+      "required": ["entries", "bytes"],
+      "additionalProperties": false
+    },
+    "bootstrapOutput": {
+      "type": "object",
+      "description": "首屏数据：Provider 概览、账号列表、语言表与 vault 提示。",
+      "properties": {
+        "providers": { "type": "array", "description": "Provider 概览数组（providerInfo 结构）。", "items": {
+          "type": "object",
+          "description": "providerInfo 结构。",
+          "properties": {
+            "id": { "type": "string", "enum": ["baidu", "deepl", "hostModel", "openai"], "description": "Provider 标识。" },
+            "configured": { "type": "boolean", "description": "凭据是否已配置。" }
+          },
+          "required": ["id", "configured"],
+          "additionalProperties": false
+        } },
+        "languages": { "type": "array", "description": "支持的语言码，首项 auto。", "items": { "type": "string", "description": "语言码。", "maxLength": 8 } },
+        "vaultWarning": { "type": "boolean", "description": "未设置 vault 口令时为 true（使用 dataDir 随机 key）。" },
+        "accounts": { "type": "array", "description": "账号列表（account 结构，详见 account 模型）。", "items": {
+          "type": "object",
+          "description": "account 结构（字段含义见 account 模型）。",
+          "properties": {
+            "id": { "type": "string", "description": "账号 UUID。", "maxLength": 64 },
+            "provider": { "type": "string", "enum": ["163", "qq", "gmail", "custom"], "description": "服务商标识；custom 使用自建 IMAP/SMTP。" },
+            "address": { "type": "string", "description": "邮箱地址。", "maxLength": 254 },
+            "alias": { "type": "string", "description": "来源简称。", "maxLength": 24 },
+            "colorToken": { "type": "string", "enum": ["a1", "a2", "a3", "a4", "a5", "a6"], "description": "来源色标记。" },
+            "username": { "type": "string", "description": "可选：IMAP/SMTP 登录名，缺省使用邮箱地址。", "maxLength": 254 },
+            "imap": {
+              "type": "object",
+              "description": "可选：自建邮箱 IMAP 服务器。",
+              "properties": {
+                "host": { "type": "string", "description": "IMAP 主机名。", "minLength": 1, "maxLength": 253 },
+                "port": { "type": "integer", "description": "IMAP 端口。", "minimum": 1, "maximum": 65535 },
+                "secure": { "type": "boolean", "description": "true 使用 TLS，false 使用 STARTTLS。" }
+              },
+              "required": ["host", "port", "secure"],
+              "additionalProperties": false
+            },
+            "smtp": {
+              "type": "object",
+              "description": "可选：自建邮箱 SMTP 服务器。",
+              "properties": {
+                "host": { "type": "string", "description": "SMTP 主机名。", "minLength": 1, "maxLength": 253 },
+                "port": { "type": "integer", "description": "SMTP 端口。", "minimum": 1, "maximum": 65535 },
+                "secure": { "type": "boolean", "description": "true 使用 TLS，false 使用 STARTTLS。" }
+              },
+              "required": ["host", "port", "secure"],
+              "additionalProperties": false
+            },
+            "createdAt": { "type": "number", "description": "添加时间戳。" },
+            "state": {
+              "type": "object",
+              "description": "connectionState 结构（见 connectionState 模型）。",
+              "properties": {
+                "status": { "type": "string", "enum": ["connecting", "connected", "auth_failed", "offline"], "description": "连接状态。" },
+                "checkedAt": { "type": "number", "description": "connected 时的时间戳。" },
+                "error": {
+                  "type": "object",
+                  "description": "errorInfo 结构（见 errorInfo 模型）。",
+                  "properties": {
+                    "code": { "type": "string", "description": "错误码。" },
+                    "message": { "type": "string", "description": "用户可读说明。", "maxLength": 300 },
+                    "retryable": { "type": "boolean", "description": "是否允许重试。" },
+                    "accountId": { "type": "string", "description": "可选：账号 ID。", "maxLength": 64 },
+                    "category": { "type": "string", "description": "可选：错误类别。" }
+                  },
+                  "required": ["code", "message", "retryable"],
+                  "additionalProperties": false
+                },
+                "nextRetryAt": { "type": "number", "description": "offline 时的时间戳。" }
+              },
+              "required": ["status"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["id", "provider", "address", "alias", "colorToken", "state", "createdAt"],
+          "additionalProperties": false
+        } }
+      },
+      "required": ["providers", "accounts", "languages", "vaultWarning"],
+      "additionalProperties": false
+    },
+    "cancelInput": {
+      "type": "object",
+      "description": "取消进行中的 RPC 操作。",
+      "properties": {
+        "requestId": { "type": "string", "description": "要取消的请求标识（与调用时传入的 __requestId 一致）。", "maxLength": 200 }
+      },
+      "required": ["requestId"],
+      "additionalProperties": false
+    },
+    "cancelResult": {
+      "type": "object",
+      "description": "app.cancel 直接返回的 Result 信封（与其他 RPC 的包裹层不同）。",
+      "properties": {
+        "ok": { "type": "boolean", "description": "是否已受理取消。" },
+        "data": {
+          "type": "object",
+          "description": "ok=true 时的数据。",
+          "properties": {
+            "cancelled": { "type": "boolean", "description": "已发出中止信号。" }
+          },
+          "required": ["cancelled"],
+          "additionalProperties": false
+        },
+        "error": {
+          "type": "object",
+          "description": "ok=false 时的 errorInfo 结构（见 errorInfo 模型）。",
+          "properties": {
+            "code": { "type": "string", "description": "错误码。" },
+            "message": { "type": "string", "description": "用户可读说明。", "maxLength": 300 },
+            "retryable": { "type": "boolean", "description": "是否允许重试。" },
+            "accountId": { "type": "string", "description": "可选：账号 ID。", "maxLength": 64 },
+            "category": { "type": "string", "description": "可选：错误类别。" }
+          },
+          "required": ["code", "message", "retryable"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["ok"],
+      "additionalProperties": false
+    },
+    "logRecord": {
+      "type": "object",
+      "description": "脱敏诊断日志条目；正文与凭据永不入日志，邮箱仅存 SHA-256 前 8 位哈希。",
+      "properties": {
+        "ts": { "type": "number", "description": "记录时间戳。" },
+        "prefix": { "type": "string", "enum": ["ekko-tools"], "description": "日志前缀。" },
+        "level": { "type": "string", "enum": ["error", "warn", "info"], "description": "日志级别。" },
+        "outcome": { "type": "string", "enum": ["success", "failure"], "description": "操作结果。" },
+        "event": { "type": "string", "description": "事件名（RPC 名或内部事件）。", "maxLength": 100 },
+        "accountIdHash": { "type": "string", "description": "可选：accountId 哈希前 8 位。", "maxLength": 8 },
+        "errorCode": { "type": "string", "description": "可选：失败时的错误码。", "maxLength": 40 },
+        "category": { "type": "string", "description": "可选：错误类别。", "maxLength": 20 },
+        "durationMs": { "type": "number", "description": "耗时毫秒。" }
+      },
+      "required": ["ts", "prefix", "level", "outcome", "event", "durationMs"],
+      "additionalProperties": false
+    },
+    "diagnosticsOutput": {
+      "type": "object",
+      "description": "最近诊断条目。",
+      "properties": {
+        "entries": { "type": "array", "description": "logRecord 数组，最多 100 条。", "items": {
+          "type": "object",
+          "description": "logRecord 结构（见 logRecord 模型）。",
+          "properties": {
+            "ts": { "type": "number", "description": "时间戳。" },
+            "prefix": { "type": "string", "enum": ["ekko-tools"], "description": "日志前缀。" },
+            "level": { "type": "string", "enum": ["error", "warn", "info"], "description": "级别。" },
+            "outcome": { "type": "string", "enum": ["success", "failure"], "description": "结果。" },
+            "event": { "type": "string", "description": "事件名。", "maxLength": 100 },
+            "accountIdHash": { "type": "string", "description": "可选：账号哈希。", "maxLength": 8 },
+            "errorCode": { "type": "string", "description": "可选：错误码。", "maxLength": 40 },
+            "category": { "type": "string", "description": "可选：类别。", "maxLength": 20 },
+            "durationMs": { "type": "number", "description": "耗时。" }
+          },
+          "required": ["ts", "prefix", "level", "outcome", "event", "durationMs"],
+          "additionalProperties": false
+        } }
+      },
+      "required": ["entries"],
+      "additionalProperties": false
+    },
+    "translateInput": {
+      "type": "object",
+      "description": "一次文本翻译请求；空文本由前端拦截，服务端 validateRequest 兜底。",
+      "properties": {
+        "text": { "type": "string", "description": "待翻译文本；≤5000 字符的语义限制由服务端 validateRequest 执行，超限返回 INPUT_TOO_LONG。" },
+        "from": { "type": "string", "description": "源语言码，auto 表示自动检测。", "minLength": 1, "maxLength": 20 },
+        "to": { "type": "string", "description": "目标语言码。", "minLength": 1, "maxLength": 20 },
+        "provider": { "type": "string", "enum": ["baidu", "deepl", "hostModel", "openai"], "description": "可选：指定 Provider；缺省按设置选择。" },
+        "retryNonce": { "type": "string", "description": "可选：重译随机数，避免缓存。", "maxLength": 64 },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 },
+        "__owner": { "type": "string", "description": "内部字段：调用方分组。", "maxLength": 200 }
+      },
+      "required": ["text", "from", "to"],
+      "additionalProperties": false
+    },
+    "providerResult": {
+      "type": "object",
+      "description": "Provider 单次结果。",
+      "properties": {
+        "provider": { "type": "string", "enum": ["baidu", "deepl", "hostModel", "openai"], "description": "实际使用的 Provider。" },
+        "detectedFrom": { "type": "string", "description": "可选：检测出的源语言码。", "maxLength": 20 },
+        "translated": { "type": "string", "description": "译文。" },
+        "latencyMs": { "type": "number", "description": "Provider 耗时毫秒。" },
+        "usage": {
+          "type": "object",
+          "description": "可选：用量统计。",
+          "properties": {
+            "chars": { "type": "integer", "description": "计费字符数。" }
+          },
+          "required": ["chars"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["provider", "translated", "latencyMs"],
+      "additionalProperties": false
+    },
+    "translationJob": {
+      "type": "object",
+      "description": "一次翻译作业（含请求快照、状态与结果）。",
+      "properties": {
+        "id": { "type": "string", "description": "作业 UUID。", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["pending", "done", "failed"], "description": "作业状态。" },
+        "createdAt": { "type": "number", "description": "创建时间戳。" },
+        "attempts": { "type": "integer", "description": "尝试次数（含自动重试）。" },
+        "cached": { "type": "boolean", "description": "可选：本次结果命中本地翻译缓存。" },
+        "request": {
+          "type": "object",
+          "description": "请求快照（translateInput 的持久化子集）。",
+          "properties": {
+            "text": { "type": "string", "description": "原文。", "maxLength": 5000 },
+            "from": { "type": "string", "description": "源语言码。", "maxLength": 20 },
+            "to": { "type": "string", "description": "目标语言码。", "maxLength": 20 },
+            "provider": { "type": "string", "enum": ["baidu", "deepl", "hostModel", "openai"], "description": "实际选定 Provider。" },
+            "retryNonce": { "type": "string", "description": "可选：重译随机数。", "maxLength": 64 }
+          },
+          "required": ["text", "from", "to", "provider"],
+          "additionalProperties": false
+        },
+        "result": {
+          "type": "object",
+          "description": "done 时：Provider 结果（providerResult 结构，见 providerResult 模型）。",
+          "properties": {
+            "provider": { "type": "string", "enum": ["baidu", "deepl", "hostModel", "openai"], "description": "实际 Provider。" },
+            "detectedFrom": { "type": "string", "description": "可选：检测源语言。", "maxLength": 20 },
+            "translated": { "type": "string", "description": "译文。" },
+            "latencyMs": { "type": "number", "description": "耗时毫秒。" },
+            "usage": {
+              "type": "object",
+              "description": "可选：用量。",
+              "properties": { "chars": { "type": "integer", "description": "计费字符数。" } },
+              "required": ["chars"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["provider", "translated", "latencyMs"],
+          "additionalProperties": false
+        },
+        "error": {
+          "type": "object",
+          "description": "failed 时：errorInfo 结构（见 errorInfo 模型）。",
+          "properties": {
+            "code": { "type": "string", "description": "错误码。" },
+            "message": { "type": "string", "description": "用户可读说明。", "maxLength": 300 },
+            "retryable": { "type": "boolean", "description": "是否允许重试。" },
+            "accountId": { "type": "string", "description": "可选：账号 ID。", "maxLength": 64 },
+            "category": { "type": "string", "description": "可选：错误类别。" }
+          },
+          "required": ["code", "message", "retryable"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["id", "status", "createdAt", "attempts", "request"],
+      "additionalProperties": false
+    },
+    "translationJobList": {
+      "type": "array",
+      "description": "翻译历史持久化数组；元素为 translationJob 结构（严格字段见 translationJob 模型）。",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "description": "translationJob 结构的持久化承载（字段定义见 translationJob 模型）。",
+        "properties": {},
+        "required": [],
+        "additionalProperties": true
+      }
+    },
+    "historyInput": {
+      "type": "object",
+      "description": "查询翻译历史。",
+      "properties": {
+        "limit": { "type": "integer", "description": "可选：返回条数上限，服务端裁剪到 50。", "minimum": 1, "maximum": 50 },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "retryInput": {
+      "type": "object",
+      "description": "重译一次历史作业。",
+      "properties": {
+        "jobId": { "type": "string", "description": "要重译的作业 ID。", "minLength": 1, "maxLength": 64 },
+        "provider": { "type": "string", "enum": ["baidu", "deepl", "hostModel", "openai"], "description": "可选：换 Provider 重译。" },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 },
+        "__owner": { "type": "string", "description": "内部字段：调用方分组。", "maxLength": 200 }
+      },
+      "required": ["jobId"],
+      "additionalProperties": false
+    },
+    "settingsSaveInput": {
+      "type": "object",
+      "description": "保存翻译设置；secret 为空字符串表示沿用已保存密钥，密文只入 vault。",
+      "properties": {
+        "provider": { "type": "string", "enum": ["baidu", "deepl", "hostModel", "openai"], "description": "可选：Provider 选择。" },
+        "appid": { "type": "string", "description": "可选：百度 APPID。", "maxLength": 100 },
+        "secret": { "type": "string", "description": "可选：百度密钥；空串=沿用旧值；写入后立即加密入 vault，响应不回传。", "maxLength": 512 },
+        "model": { "type": "string", "description": "可选：宿主模型名。", "maxLength": 200 },
+        "openaiBaseUrl": { "type": "string", "description": "可选：OpenAI 兼容接口基址，如 https://api.openai.com/v1；写入前校验协议与路径。", "maxLength": 300 },
+        "openaiApiKey": { "type": "string", "description": "可选：OpenAI 兼容接口密钥；空串=沿用旧值；只入 vault，不回传。", "maxLength": 512 },
+        "openaiModel": { "type": "string", "description": "可选：OpenAI 兼容接口模型名，如 gpt-4o-mini、deepseek-chat。", "maxLength": 200 },
+        "deeplApiKey": { "type": "string", "description": "可选：DeepL API Key；以 :fx 结尾使用免费端点；空串=沿用旧值；只入 vault，不回传。", "maxLength": 512 },
+        "glossary": { "type": "array", "description": "可选：术语表，最多 100 条；保存后优先用于翻译。", "maxItems": 100, "items": { "type": "object", "description": "glossaryEntry 结构（见 glossaryEntry 模型）。", "properties": { "source": { "type": "string", "description": "原文术语。", "minLength": 1, "maxLength": 100 }, "target": { "type": "string", "description": "目标译法。", "minLength": 1, "maxLength": 200 } }, "required": ["source", "target"], "additionalProperties": false } },
+        "selection": { "type": "boolean", "description": "可选：是否启用划词浮条。" },
+        "logLevel": { "type": "string", "enum": ["off", "error", "warn", "info"], "description": "可选：日志级别。" },
+        "syncReadReceipts": { "type": "boolean", "description": "可选：是否把已读/未读标记回写到 IMAP 服务器；默认关闭，关闭时只写本机。" },
+        "notifications": { "type": "object", "description": "可选：新邮件提醒设置；省略时沿用已保存值。", "properties": {
+          "enabled": { "type": "boolean", "description": "是否推送新邮件提醒。" },
+          "dndEnabled": { "type": "boolean", "description": "是否启用免打扰时段。" },
+          "dndStart": { "type": "string", "description": "免打扰开始时间 HH:mm。", "minLength": 5, "maxLength": 5 },
+          "dndEnd": { "type": "string", "description": "免打扰结束时间 HH:mm。", "minLength": 5, "maxLength": 5 },
+          "mutedAccountIds": { "type": "array", "description": "不提醒的账号 ID，最多 100 个。", "maxItems": 100, "items": { "type": "string", "description": "账号 ID。", "minLength": 1, "maxLength": 64 } }
+        }, "required": ["enabled", "dndEnabled", "dndStart", "dndEnd", "mutedAccountIds"], "additionalProperties": false },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "settingsGetOutput": {
+      "type": "object",
+      "description": "设置回显；密钥只回传 configured 标记，绝不回明文。",
+      "properties": {
+        "provider": { "type": "string", "description": "可选：Provider 选择。", "maxLength": 20 },
+        "appid": { "type": "string", "description": "已保存的 APPID，未配置为空串。", "maxLength": 100 },
+        "configured": { "type": "boolean", "description": "百度密钥是否已保存。" },
+        "model": { "type": "string", "description": "可选：宿主模型名。", "maxLength": 200 },
+        "openaiBaseUrl": { "type": "string", "description": "已保存的 OpenAI 兼容接口基址，未配置为空串。", "maxLength": 300 },
+        "openaiModel": { "type": "string", "description": "已保存的 OpenAI 兼容模型名。", "maxLength": 200 },
+        "openaiConfigured": { "type": "boolean", "description": "OpenAI 兼容接口密钥是否已保存。" },
+        "deeplConfigured": { "type": "boolean", "description": "DeepL API Key 是否已保存。" },
+        "glossary": { "type": "array", "description": "已保存的术语表，最多 100 条。", "maxItems": 100, "items": { "type": "object", "description": "glossaryEntry 结构（见 glossaryEntry 模型）。", "properties": { "source": { "type": "string", "description": "原文术语。", "minLength": 1, "maxLength": 100 }, "target": { "type": "string", "description": "目标译法。", "minLength": 1, "maxLength": 200 } }, "required": ["source", "target"], "additionalProperties": false } },
+        "selection": { "type": "boolean", "description": "可选：划词浮条开关。" },
+        "logLevel": { "type": "string", "description": "可选：日志级别。", "maxLength": 10 },
+        "syncReadReceipts": { "type": "boolean", "description": "是否把已读/未读标记回写到 IMAP 服务器；默认 false。" },
+        "notifications": { "type": "object", "description": "新邮件提醒设置；未保存时回传默认值。", "properties": {
+          "enabled": { "type": "boolean", "description": "是否推送新邮件提醒。" },
+          "dndEnabled": { "type": "boolean", "description": "是否启用免打扰时段。" },
+          "dndStart": { "type": "string", "description": "免打扰开始时间 HH:mm。", "minLength": 5, "maxLength": 5 },
+          "dndEnd": { "type": "string", "description": "免打扰结束时间 HH:mm。", "minLength": 5, "maxLength": 5 },
+          "mutedAccountIds": { "type": "array", "description": "不提醒的账号 ID，最多 100 个。", "maxItems": 100, "items": { "type": "string", "description": "账号 ID。", "minLength": 1, "maxLength": 64 } }
+        }, "required": ["enabled", "dndEnabled", "dndStart", "dndEnd", "mutedAccountIds"], "additionalProperties": false }
+      },
+      "required": ["appid", "configured", "openaiBaseUrl", "openaiConfigured", "deeplConfigured", "glossary"],
+      "additionalProperties": false
+    },
+    "settingsSaveOutput": {
+      "type": "object",
+      "description": "保存结果。",
+      "properties": {
+        "saved": { "type": "boolean", "description": "已保存。" }
+      },
+      "required": ["saved"],
+      "additionalProperties": false
+    },
+    "addAccountInput": {
+      "type": "object",
+      "description": "添加邮箱账号；secret 是授权码/应用密码唯一一次出现的位置，立即加密入 vault，响应与日志不含明文。custom 必须同时提供 IMAP 与 SMTP。",
+      "properties": {
+        "provider": { "type": "string", "enum": ["163", "qq", "gmail", "custom"], "description": "服务商标识；custom 使用自建服务器。" },
+        "address": { "type": "string", "description": "邮箱地址。", "minLength": 3, "maxLength": 254 },
+        "secret": { "type": "string", "description": "客户端授权码、应用专用密码，或自建邮箱密码。", "minLength": 1, "maxLength": 512 },
+        "alias": { "type": "string", "description": "可选：来源简称，≤6 字。", "maxLength": 24 },
+        "username": { "type": "string", "description": "可选：IMAP/SMTP 登录名，缺省使用邮箱地址。", "maxLength": 254 },
+        "imap": {
+          "type": "object",
+          "description": "可选：自建邮箱 IMAP 服务器。",
+          "properties": {
+            "host": { "type": "string", "description": "IMAP 主机名。", "minLength": 1, "maxLength": 253 },
+            "port": { "type": "integer", "description": "IMAP 端口。", "minimum": 1, "maximum": 65535 },
+            "secure": { "type": "boolean", "description": "true 使用 TLS，false 使用 STARTTLS。" }
+          },
+          "required": ["host", "port", "secure"],
+          "additionalProperties": false
+        },
+        "smtp": {
+          "type": "object",
+          "description": "可选：自建邮箱 SMTP 服务器。",
+          "properties": {
+            "host": { "type": "string", "description": "SMTP 主机名。", "minLength": 1, "maxLength": 253 },
+            "port": { "type": "integer", "description": "SMTP 端口。", "minimum": 1, "maximum": 65535 },
+            "secure": { "type": "boolean", "description": "true 使用 TLS，false 使用 STARTTLS。" }
+          },
+          "required": ["host", "port", "secure"],
+          "additionalProperties": false
+        },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 }
+      },
+      "required": ["provider", "address", "secret"],
+      "additionalProperties": false
+    },
+    "accountIdInput": {
+      "type": "object",
+      "description": "按 ID 指定账号（移除/测试连接）。",
+      "properties": {
+        "accountId": { "type": "string", "description": "账号 ID。", "minLength": 1, "maxLength": 200 },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 }
+      },
+      "required": ["accountId"],
+      "additionalProperties": false
+    },
+    "removeAccountOutput": {
+      "type": "object",
+      "description": "移除结果；同时清除 vault 条目、缓存与已读/已译标记。",
+      "properties": {
+        "removed": { "type": "boolean", "description": "已移除。" }
+      },
+      "required": ["removed"],
+      "additionalProperties": false
+    },
+    "mailSummary": {
+      "type": "object",
+      "description": "邮件摘要（列表项）。",
+      "properties": {
+        "accountId": { "type": "string", "description": "所属账号 ID。", "maxLength": 64 },
+        "messageId": { "type": "string", "description": "服务端 UIDVALIDITY:UID。", "maxLength": 200 },
+        "subject": { "type": "string", "description": "主题（RFC2047 已解码）。", "maxLength": 1000 },
+        "snippet": { "type": "string", "description": "纯文本摘要 ≤140 字。", "maxLength": 200 },
+        "date": { "type": "number", "description": "日期时间戳。" },
+        "unread": { "type": "boolean", "description": "未读标记（本地状态）。" },
+        "hasAttachments": { "type": "boolean", "description": "是否有附件。" },
+        "from": {
+          "type": "object",
+          "description": "发件人。",
+          "properties": {
+            "name": { "type": "string", "description": "可选：显示名。", "maxLength": 200 },
+            "address": { "type": "string", "description": "地址。", "maxLength": 254 }
+          },
+          "required": ["address"],
+          "additionalProperties": false
+        },
+        "translated": { "type": "boolean", "description": "可选：列表“已译”标记。" },
+        "lang": { "type": "string", "description": "可选：检测结果语言码。", "maxLength": 20 }
+      },
+      "required": ["accountId", "messageId", "subject", "snippet", "date", "unread", "hasAttachments", "from"],
+      "additionalProperties": false
+    },
+    "mailListInput": {
+      "type": "object",
+      "description": "统一收件箱分页拉取；多账号串行拉取，单账号失败不影响其他账号。",
+      "properties": {
+        "accountIds": { "type": "array", "description": "可选：筛选账号（缺省全部）。", "maxItems": 100, "items": { "type": "string", "description": "账号 ID。", "maxLength": 200 } },
+        "cursor": { "type": "string", "description": "可选：分页偏移（数字串）。", "maxLength": 10 },
+        "limit": { "type": "integer", "description": "可选：页大小 1~100，缺省 20。", "minimum": 1, "maximum": 100 },
+        "refresh": { "type": "boolean", "description": "可选：true=先连接 IMAP 拉取最新邮件再读本地；缺省只读本地缓存，不发网络请求。" },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 },
+        "__owner": { "type": "string", "description": "内部字段：调用方分组。", "maxLength": 200 }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mailPage": {
+      "type": "object",
+      "description": "统一收件箱页：条目、游标、部分失败与统计。",
+      "properties": {
+        "updated": { "type": "integer", "description": "本次成功连接服务器并合并缓存的账号数；纯本地读取为 0。" },
+        "lastSyncAt": { "type": "number", "description": "可选：所选账号最近一次成功同步时间戳；纯本地读取时原样返回。" },
+        "total": { "type": "integer", "description": "本次参与拉取的账号总数。" },
+        "cached": { "type": "integer", "description": "可选：当前筛选下本地缓存的邮件总数；items 只包含本页。" },
+        "nextCursor": { "type": "string", "description": "可选：下一页游标。", "maxLength": 10 },
+        "unreadByAccount": { "type": "object", "description": "可选：按账号统计的未读数，键为账号 ID。", "properties": {}, "required": [], "additionalProperties": true },
+        "partial": { "type": "array", "description": "可选：失败账号的错误列表。", "maxItems": 100, "items": {
+          "type": "object",
+          "description": "errorInfo 结构 + accountId（见 errorInfo 模型）。",
+          "properties": {
+            "code": { "type": "string", "description": "错误码。" },
+            "message": { "type": "string", "description": "用户可读说明。", "maxLength": 300 },
+            "retryable": { "type": "boolean", "description": "是否允许重试。" },
+            "accountId": { "type": "string", "description": "失败账号 ID。", "maxLength": 64 },
+            "category": { "type": "string", "description": "可选：错误类别。" }
+          },
+          "required": ["code", "message", "retryable"],
+          "additionalProperties": false
+        } },
+        "items": { "type": "array", "description": "邮件摘要列表（mailSummary 结构，见 mailSummary 模型）。", "maxItems": 100, "items": {
+          "type": "object",
+          "description": "mailSummary 结构（字段见 mailSummary 模型）。",
+          "properties": {
+            "accountId": { "type": "string", "description": "账号 ID。", "maxLength": 64 },
+            "messageId": { "type": "string", "description": "邮件 ID。", "maxLength": 200 },
+            "subject": { "type": "string", "description": "主题。", "maxLength": 1000 },
+            "snippet": { "type": "string", "description": "摘要。", "maxLength": 200 },
+            "date": { "type": "number", "description": "时间戳。" },
+            "unread": { "type": "boolean", "description": "未读。" },
+            "hasAttachments": { "type": "boolean", "description": "有附件。" },
+            "translated": { "type": "boolean", "description": "可选：已译标记。" },
+            "lang": { "type": "string", "description": "可选：语言码。", "maxLength": 20 },
+            "from": {
+              "type": "object",
+              "description": "发件人。",
+              "properties": {
+                "name": { "type": "string", "description": "可选：显示名。", "maxLength": 200 },
+                "address": { "type": "string", "description": "地址。", "maxLength": 254 }
+              },
+              "required": ["address"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["accountId", "messageId", "subject", "snippet", "date", "unread", "hasAttachments", "from"],
+          "additionalProperties": false
+        } }
+      },
+      "required": ["items", "updated", "total"],
+      "additionalProperties": false
+    },
+    "mailGetInput": {
+      "type": "object",
+      "description": "取单封邮件详情（正文已三道清洗：服务端、客户端、sandbox iframe）。",
+      "properties": {
+        "accountId": { "type": "string", "description": "账号 ID。", "minLength": 1, "maxLength": 200 },
+        "messageId": { "type": "string", "description": "邮件 ID。", "minLength": 1, "maxLength": 200 },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 },
+        "__owner": { "type": "string", "description": "内部字段：调用方分组。", "maxLength": 200 }
+      },
+      "required": ["accountId", "messageId"],
+      "additionalProperties": false
+    },
+    "mailMessage": {
+      "type": "object",
+      "description": "邮件详情：mailSummary 全部字段 + 收件人/抄送/正文/附件。",
+      "properties": {
+        "accountId": { "type": "string", "description": "账号 ID。", "maxLength": 64 },
+        "messageId": { "type": "string", "description": "邮件 ID。", "maxLength": 200 },
+        "subject": { "type": "string", "description": "主题。", "maxLength": 1000 },
+        "snippet": { "type": "string", "description": "摘要。", "maxLength": 200 },
+        "date": { "type": "number", "description": "时间戳。" },
+        "unread": { "type": "boolean", "description": "未读。" },
+        "hasAttachments": { "type": "boolean", "description": "有附件。" },
+        "text": { "type": "string", "description": "纯文本正文（划词与整封翻译用）。" },
+        "html": { "type": "string", "description": "可选：清洗后 HTML，放入 sandbox iframe 渲染；≤512KB。" },
+        "remoteContentBlocked": { "type": "boolean", "description": "是否拦截了远程图片。" },
+        "imageNotice": { "type": "string", "description": "可选：mail.images 加载后的提示文案。", "maxLength": 200 },
+        "lang": { "type": "string", "description": "可选：语言码。", "maxLength": 20 },
+        "translated": { "type": "boolean", "description": "可选：已译标记。" },
+        "from": {
+          "type": "object",
+          "description": "发件人。",
+          "properties": {
+            "name": { "type": "string", "description": "可选：显示名。", "maxLength": 200 },
+            "address": { "type": "string", "description": "地址。", "maxLength": 254 }
+          },
+          "required": ["address"],
+          "additionalProperties": false
+        },
+        "to": { "type": "array", "description": "收件人列表。", "items": {
+          "type": "object",
+          "description": "联系人。",
+          "properties": {
+            "name": { "type": "string", "description": "可选：显示名。", "maxLength": 200 },
+            "address": { "type": "string", "description": "地址。", "maxLength": 254 }
+          },
+          "required": ["address"],
+          "additionalProperties": false
+        } },
+        "cc": { "type": "array", "description": "抄送列表。", "items": {
+          "type": "object",
+          "description": "联系人。",
+          "properties": {
+            "name": { "type": "string", "description": "可选：显示名。", "maxLength": 200 },
+            "address": { "type": "string", "description": "地址。", "maxLength": 254 }
+          },
+          "required": ["address"],
+          "additionalProperties": false
+        } },
+        "attachments": { "type": "array", "description": "附件列表（attachment 结构，见 attachment 模型）。", "items": {
+          "type": "object",
+          "description": "attachment 结构（字段见 attachment 模型）。",
+          "properties": {
+            "id": { "type": "string", "description": "附件 ID。", "maxLength": 200 },
+            "filename": { "type": "string", "description": "已清洗文件名，无路径分隔符。", "maxLength": 255 },
+            "mime": { "type": "string", "description": "MIME 类型。", "maxLength": 100 },
+            "size": { "type": "integer", "description": "字节数。" },
+            "inline": { "type": "boolean", "description": "是否内联（cid）。" },
+            "blocked": { "type": "string", "enum": ["too_large", "dangerous_type"], "description": "可选：被拦截原因。" }
+          },
+          "required": ["id", "filename", "mime", "size", "inline"],
+          "additionalProperties": false
+        } }
+      },
+      "required": ["accountId", "messageId", "subject", "snippet", "date", "unread", "hasAttachments", "from", "text", "remoteContentBlocked", "to", "cc", "attachments"],
+      "additionalProperties": false
+    },
+    "mailAttachmentOutput": {
+      "type": "object",
+      "description": "附件下载载荷（base64 一次传输；危险类型与超限附件始终拒绝）。",
+      "properties": {
+        "filename": { "type": "string", "description": "清洗后的文件名。", "maxLength": 255 },
+        "mime": { "type": "string", "description": "MIME 类型。", "maxLength": 100 },
+        "size": { "type": "integer", "description": "原始字节数。" },
+        "dataBase64": { "type": "string", "description": "base64 内容，受 maxAttachmentMB 约束。" }
+      },
+      "required": ["filename", "mime", "size", "dataBase64"],
+      "additionalProperties": false
+    },
+    "imageDomainsOutput": {
+      "type": "object",
+      "description": "该封邮件引用的远程图片域名（去重小写），供用户确认白名单。",
+      "properties": {
+        "domains": { "type": "array", "description": "域名数组。", "maxItems": 50, "items": { "type": "string", "description": "主机名。", "maxLength": 253 } }
+      },
+      "required": ["domains"],
+      "additionalProperties": false
+    },
+    "imagesInput": {
+      "type": "object",
+      "description": "确认加载远程图片；仅放行用户确认的 HTTPS 域名位图。",
+      "properties": {
+        "accountId": { "type": "string", "description": "账号 ID。", "minLength": 1, "maxLength": 200 },
+        "messageId": { "type": "string", "description": "邮件 ID。", "minLength": 1, "maxLength": 200 },
+        "confirmed": { "type": "boolean", "description": "必须为 true（UI 确认框通过）。" },
+        "allowedDomains": { "type": "array", "description": "确认放行的域名白名单；最多24个，按邮件实际引用去重。", "maxItems": 24, "items": { "type": "string", "description": "主机名。", "maxLength": 253 } },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 },
+        "__owner": { "type": "string", "description": "内部字段：调用方分组。", "maxLength": 200 }
+      },
+      "required": ["accountId", "messageId", "confirmed", "allowedDomains"],
+      "additionalProperties": false
+    },
+    "markReadInput": {
+      "type": "object",
+      "description": "本地已读/未读标记（不回写服务器）。",
+      "properties": {
+        "accountId": { "type": "string", "description": "账号 ID。", "minLength": 1, "maxLength": 200 },
+        "messageId": { "type": "string", "description": "邮件 ID。", "minLength": 1, "maxLength": 200 },
+        "read": { "type": "boolean", "description": "true=已读，false=未读。" },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 }
+      },
+      "required": ["accountId", "messageId", "read"],
+      "additionalProperties": false
+    },
+    "markReadOutput": {
+      "type": "object",
+      "description": "标记结果。",
+      "properties": {
+        "ok": { "type": "boolean", "description": "本地标记已写入。" },
+        "synced": { "type": "boolean", "description": "可选：开启服务器回写时，IMAP \\Seen 是否写入成功；关闭回写时不返回。" }
+      },
+      "required": ["ok"],
+      "additionalProperties": false
+    },
+    "markAllReadInput": {
+      "type": "object",
+      "description": "把已缓存邮件全部标为已读；开启服务器回写时同时写入 IMAP \\Seen。",
+      "properties": {
+        "accountIds": { "type": "array", "description": "可选：只处理这些账号；缺省全部。", "maxItems": 100, "items": { "type": "string", "description": "账号 ID。", "maxLength": 200 } },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "markAllReadOutput": {
+      "type": "object",
+      "description": "批量标记结果。",
+      "properties": {
+        "updated": { "type": "integer", "description": "本次标为已读的邮件数。", "minimum": 0 },
+        "synced": { "type": "boolean", "description": "可选：开启服务器回写时，所有账号 IMAP \\Seen 是否写入成功；关闭回写时不返回。" }
+      },
+      "required": ["updated"],
+      "additionalProperties": false
+    },
+    "mailReplyInput": {
+      "type": "object",
+      "description": "直接回复当前邮件：收件人取原邮件 Reply-To 或 From，主题自动补 Re:，正文由用户填写。",
+      "properties": {
+        "accountId": { "type": "string", "description": "发信账号 ID。", "minLength": 1, "maxLength": 200 },
+        "messageId": { "type": "string", "description": "被回复邮件 ID。", "minLength": 1, "maxLength": 200 },
+        "body": { "type": "string", "description": "回复正文，最多 20000 字。", "minLength": 1, "maxLength": 20000 },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 },
+        "__owner": { "type": "string", "description": "内部字段：调用方分组。", "maxLength": 200 }
+      },
+      "required": ["accountId", "messageId", "body"],
+      "additionalProperties": false
+    },
+    "mailReplyOutput": {
+      "type": "object",
+      "description": "SMTP 回复结果。",
+      "properties": {
+        "sent": { "type": "boolean", "description": "服务器已接受发信请求。" },
+        "messageId": { "type": "string", "description": "可选：SMTP 返回的 Message-ID。", "maxLength": 900 }
+      },
+      "required": ["sent"],
+      "additionalProperties": false
+    },
+    "bilingualInput": {
+      "type": "object",
+      "description": "邮件整封正文翻译；源语言自动识别，仅超长正文分批，支持批次重试与续译。",
+      "properties": {
+        "accountId": { "type": "string", "description": "账号 ID。", "minLength": 1, "maxLength": 200 },
+        "messageId": { "type": "string", "description": "邮件 ID。", "minLength": 1, "maxLength": 200 },
+        "target": { "type": "string", "enum": ["zh", "en", "ja", "ko", "fr", "de", "es", "ru"], "description": "目标语言（不含 auto）。" },
+        "segmentIndex": { "type": "integer", "description": "可选：只翻译该段（单段重试）。", "minimum": 0, "maximum": 19999 },
+        "retry": { "type": "boolean", "description": "可选：强制重译已译段。" },
+        "continue": { "type": "boolean", "description": "可选：从未完成段续译。" },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 },
+        "__owner": { "type": "string", "description": "内部字段：调用方分组。", "maxLength": 200 }
+      },
+      "required": ["accountId", "messageId", "target"],
+      "additionalProperties": false
+    },
+    "bilingualSegment": {
+      "type": "object",
+      "description": "邮件正文翻译批次；整封邮件通常为 1 批，超过 5000 字才分批。",
+      "properties": {
+        "index": { "type": "integer", "description": "批次序号。" },
+        "source": { "type": "string", "description": "该批原文。" },
+        "translated": { "type": "string", "description": "可选：译文；与原文相同表示无需翻译。" },
+        "error": {
+          "type": "object",
+          "description": "可选：该段失败信息（errorInfo 结构）。",
+          "properties": {
+            "code": { "type": "string", "description": "错误码。" },
+            "message": { "type": "string", "description": "用户可读说明。", "maxLength": 300 },
+            "retryable": { "type": "boolean", "description": "是否允许重试。" },
+            "accountId": { "type": "string", "description": "可选：账号 ID。", "maxLength": 64 },
+            "category": { "type": "string", "description": "可选：错误类别。" }
+          },
+          "required": ["code", "message", "retryable"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["index", "source"],
+      "additionalProperties": false
+    },
+    "bilingualBody": {
+      "type": "object",
+      "description": "整封邮件正文的翻译结果；通常只有 1 个批次。",
+      "properties": {
+        "messageId": { "type": "string", "description": "邮件 ID。", "maxLength": 200 },
+        "complete": { "type": "boolean", "description": "是否全部批次已译。" },
+        "segments": { "type": "array", "description": "批次数组（bilingualSegment 结构，见 bilingualSegment 模型）。", "items": {
+          "type": "object",
+          "description": "bilingualSegment 结构（字段见 bilingualSegment 模型）。",
+          "properties": {
+            "index": { "type": "integer", "description": "批次序号。" },
+            "source": { "type": "string", "description": "该批原文。" },
+            "translated": { "type": "string", "description": "可选：译文。" },
+            "error": {
+              "type": "object",
+              "description": "可选：该段失败信息。",
+              "properties": {
+                "code": { "type": "string", "description": "错误码。" },
+                "message": { "type": "string", "description": "用户可读说明。", "maxLength": 300 },
+                "retryable": { "type": "boolean", "description": "是否允许重试。" },
+                "accountId": { "type": "string", "description": "可选：账号 ID。", "maxLength": 64 },
+                "category": { "type": "string", "description": "可选：错误类别。" }
+              },
+              "required": ["code", "message", "retryable"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["index", "source"],
+          "additionalProperties": false
+        } }
+      },
+      "required": ["messageId", "complete", "segments"],
+      "additionalProperties": false
+    },
+    "accountStateEvent": {
+      "type": "object",
+      "description": "推送事件 account.state 载荷：账号连接状态变化。",
+      "properties": {
+        "eventId": { "type": "string", "description": "事件唯一 ID，客户端去重用。", "maxLength": 64 },
+        "accountId": { "type": "string", "description": "账号 ID。", "maxLength": 64 },
+        "state": {
+          "type": "object",
+          "description": "connectionState 结构（见 connectionState 模型）。",
+          "properties": {
+            "status": { "type": "string", "enum": ["connecting", "connected", "auth_failed", "offline"], "description": "连接状态。" },
+            "checkedAt": { "type": "number", "description": "connected 时的时间戳。" },
+            "error": {
+              "type": "object",
+              "description": "errorInfo 结构（见 errorInfo 模型）。",
+              "properties": {
+                "code": { "type": "string", "description": "错误码。" },
+                "message": { "type": "string", "description": "用户可读说明。", "maxLength": 300 },
+                "retryable": { "type": "boolean", "description": "是否允许重试。" },
+                "accountId": { "type": "string", "description": "可选：账号 ID。", "maxLength": 64 },
+                "category": { "type": "string", "description": "可选：错误类别。" }
+              },
+              "required": ["code", "message", "retryable"],
+              "additionalProperties": false
+            },
+            "nextRetryAt": { "type": "number", "description": "offline 时的时间戳。" }
+          },
+          "required": ["status"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["eventId", "accountId", "state"],
+      "additionalProperties": false
+    },
+    "mailArrivedEvent": {
+      "type": "object",
+      "description": "推送事件 mail.arrived 载荷：某账号到达新邮件。",
+      "properties": {
+        "eventId": { "type": "string", "description": "事件唯一 ID。", "maxLength": 64 },
+        "accountId": { "type": "string", "description": "账号 ID。", "maxLength": 64 },
+        "count": { "type": "integer", "description": "新到达邮件数。" }
+      },
+      "required": ["eventId", "accountId", "count"],
+      "additionalProperties": false
+    },
+    "mailReadEvent": {
+      "type": "object",
+      "description": "推送事件 mail.read 载荷：单封邮件已读状态已写入本地缓存。",
+      "properties": {
+        "eventId": { "type": "string", "description": "事件唯一 ID。", "maxLength": 64 },
+        "accountId": { "type": "string", "description": "账号 ID。", "maxLength": 64 },
+        "messageId": { "type": "string", "description": "邮件 ID。", "maxLength": 200 },
+        "read": { "type": "boolean", "description": "true=已读，false=未读。" }
+      },
+      "required": ["eventId", "accountId", "messageId", "read"],
+      "additionalProperties": false
+    },
+    "translateProgressEvent": {
+      "type": "object",
+      "description": "推送事件 translate.progress 载荷：整封邮件翻译批次进度。",
+      "properties": {
+        "eventId": { "type": "string", "description": "事件唯一 ID。", "maxLength": 64 },
+        "jobId": { "type": "string", "description": "作业标识（accountId:messageId:target）。", "maxLength": 300 },
+        "done": { "type": "integer", "description": "已完成段数。" },
+        "total": { "type": "integer", "description": "总段数。" },
+        "segment": {
+          "type": "object",
+          "description": "刚完成的段（bilingualSegment 结构，见 bilingualSegment 模型）。",
+          "properties": {
+            "index": { "type": "integer", "description": "段序号。" },
+            "source": { "type": "string", "description": "该批原文。" },
+            "translated": { "type": "string", "description": "可选：译文。" },
+            "error": {
+              "type": "object",
+              "description": "可选：该段失败信息。",
+              "properties": {
+                "code": { "type": "string", "description": "错误码。" },
+                "message": { "type": "string", "description": "用户可读说明。", "maxLength": 300 },
+                "retryable": { "type": "boolean", "description": "是否允许重试。" },
+                "accountId": { "type": "string", "description": "可选：账号 ID。", "maxLength": 64 },
+                "category": { "type": "string", "description": "可选：错误类别。" }
+              },
+              "required": ["code", "message", "retryable"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["index", "source"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["eventId", "jobId", "done", "total", "segment"],
+      "additionalProperties": false
+    },
+    "accountList": {
+      "type": "array",
+      "description": "持久化账号数组；元素为 account 结构（严格字段见 account 模型），不含 secret。",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "description": "account 结构的持久化承载（字段定义见 account 模型）。",
+        "properties": {},
+        "required": [],
+        "additionalProperties": true
+      }
+    },
+    "mailSummaryList": {
+      "type": "array",
+      "description": "持久化邮件摘要缓存（≤2000 条）；元素为 mailSummary 结构（见 mailSummary 模型）。",
+      "maxItems": 2000,
+      "items": {
+        "type": "object",
+        "description": "mailSummary 结构的持久化承载（字段定义见 mailSummary 模型）。",
+        "properties": {},
+        "required": [],
+        "additionalProperties": true
+      }
+    },
+    "preferencesModel": {
+      "type": "object",
+      "description": "用户偏好：Provider 选择、划词开关、模型名、OpenAI 兼容配置、术语表与日志级别。",
+      "properties": {
+        "provider": { "type": "string", "description": "Provider 选择。", "maxLength": 20 },
+        "selection": { "type": "boolean", "description": "划词浮条开关。" },
+        "model": { "type": "string", "description": "宿主模型名。", "maxLength": 200 },
+        "openaiModel": { "type": "string", "description": "OpenAI 兼容接口模型名。", "maxLength": 200 },
+        "glossary": { "type": "array", "description": "术语表，最多 100 条；用于占位保护与 AI 提示。", "maxItems": 100, "items": { "type": "object", "description": "glossaryEntry 结构（见 glossaryEntry 模型）。", "properties": { "source": { "type": "string", "description": "原文术语。", "minLength": 1, "maxLength": 100 }, "target": { "type": "string", "description": "目标译法。", "minLength": 1, "maxLength": 200 } }, "required": ["source", "target"], "additionalProperties": false } },
+        "logLevel": { "type": "string", "description": "日志级别 off/error/warn/info。", "maxLength": 10 },
+        "syncReadReceipts": { "type": "boolean", "description": "是否把已读/未读标记回写到 IMAP 服务器；默认 false。" },
+        "notifications": { "type": "object", "description": "新邮件提醒设置；含免打扰时段与静音账号。", "properties": {
+          "enabled": { "type": "boolean", "description": "是否推送新邮件提醒。" },
+          "dndEnabled": { "type": "boolean", "description": "是否启用免打扰时段。" },
+          "dndStart": { "type": "string", "description": "免打扰开始时间 HH:mm。", "minLength": 5, "maxLength": 5 },
+          "dndEnd": { "type": "string", "description": "免打扰结束时间 HH:mm。", "minLength": 5, "maxLength": 5 },
+          "mutedAccountIds": { "type": "array", "description": "不提醒的账号 ID，最多 100 个。", "maxItems": 100, "items": { "type": "string", "description": "账号 ID。", "minLength": 1, "maxLength": 64 } }
+        }, "required": ["enabled", "dndEnabled", "dndStart", "dndEnd", "mutedAccountIds"], "additionalProperties": false }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "legacySettings": {
+      "type": "object",
+      "description": "v0.3.0 旧版设置键（迁移源）；secret 已迁入 vault，此处只保留非敏感字段。",
+      "properties": {
+        "appid": { "type": "string", "description": "可选：旧 APPID。", "maxLength": 100 },
+        "from": { "type": "string", "description": "可选：旧默认源语言。", "maxLength": 20 },
+        "to": { "type": "string", "description": "可选：旧默认目标语言。", "maxLength": 20 }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mailAttachmentInput": {
+      "type": "object",
+      "description": "下载附件输入。",
+      "properties": {
+        "accountId": { "type": "string", "description": "账号 ID。", "minLength": 1, "maxLength": 200 },
+        "messageId": { "type": "string", "description": "邮件 ID。", "minLength": 1, "maxLength": 200 },
+        "attachmentId": { "type": "string", "description": "附件 ID。", "minLength": 1, "maxLength": 100 },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 },
+        "__owner": { "type": "string", "description": "内部字段：调用方分组。", "maxLength": 200 }
+      },
+      "required": ["accountId", "messageId", "attachmentId"],
+      "additionalProperties": false
+    },
+    "readMap": {
+      "type": "object",
+      "description": "已读标记映射：键 accountId:messageId → 已读布尔；动态键，值为布尔。",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+    },
+    "translatedMap": {
+      "type": "object",
+      "description": "列表已译标记映射：键 accountId:messageId → 布尔；动态键。",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+    },
+    "bilingualMap": {
+      "type": "object",
+      "description": "整封正文翻译结果持久化映射：键 accountId:messageId:target → bilingualBody 结构；≤20 条且 ≤2MB，动态键。",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+    },
+    "imageMap": {
+      "type": "object",
+      "description": "已确认加载的远程图片映射：键 accountId:messageId → {图片URL→dataURL}；动态键。",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+    },
+    "glossaryEntry": {
+      "type": "object",
+      "description": "术语表条目：原文术语与固定译法，翻译时优先采用。",
+      "properties": {
+        "source": { "type": "string", "description": "原文术语，1-100 字符。", "minLength": 1, "maxLength": 100 },
+        "target": { "type": "string", "description": "目标译法，1-200 字符。", "minLength": 1, "maxLength": 200 }
+      },
+      "required": ["source", "target"],
+      "additionalProperties": false
+    },
+    "translationCacheMap": {
+      "type": "object",
+      "description": "翻译缓存映射：键为 provider/from/to/text/glossary 哈希 → {at, job}；≤100 条且 ≤512KB。",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+    },
+    "requestIdOnly": {
+      "type": "object",
+      "description": "无业务参数请求的输入；客户端 call() 总是携带 __requestId。",
+      "properties": {
+        "__requestId": { "type": "string", "description": "内部字段：客户端请求标识。", "maxLength": 200 },
+        "__owner": { "type": "string", "description": "内部字段：调用方分组。", "maxLength": 200 }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mailSyncState": {
+      "type": "object",
+      "description": "单账号本地同步状态：首次同步标记、上次成功时间、更早邮件游标与最近错误。",
+      "properties": {
+        "initialized": { "type": "boolean", "description": "可选：已完成首次同步；缺省视为尚未同步。" },
+        "lastSyncAt": { "type": "number", "description": "可选：上次成功连接 IMAP 并合并缓存的时间戳。" },
+        "lastErrorAt": { "type": "number", "description": "可选：最近一次同步失败时间戳。" },
+        "oldestCursor": { "type": "string", "description": "可选：继续向更早邮件翻页的服务器游标；缺省表示已到最早一封。", "maxLength": 10 },
+        "exhausted": { "type": "boolean", "description": "可选：已确认服务器没有更早邮件；缺省时允许从本地缓存最旧邮件反推游标再检查一次。" },
+        "lastError": {
+          "type": "object",
+          "description": "可选：最近一次失败信息（errorInfo 结构）。",
+          "properties": {
+            "code": { "type": "string", "description": "错误码。" },
+            "message": { "type": "string", "description": "用户可读说明。", "maxLength": 300 },
+            "retryable": { "type": "boolean", "description": "是否允许重试。" },
+            "category": { "type": "string", "description": "可选：错误类别。" },
+            "accountId": { "type": "string", "description": "可选：账号 ID。", "maxLength": 64 }
+          },
+          "required": ["code", "message", "retryable"],
+          "additionalProperties": false
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mailSyncMap": {
+      "type": "object",
+      "description": "账号同步状态映射：键为 accountId，值为 mailSyncState；动态键。",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+    },
+    "knownMap": {
+      "type": "object",
+      "description": "已见邮件索引：键 accountId:messageId，值为首次记录时间戳；用于只对真实新增邮件发通知。",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+    },
+    "storedBody": {
+      "type": "object",
+      "description": "已打开邮件正文缓存条目：raw 为解析后的原始邮件；超过 512KB 的附件二进制以空串占位，下载时按需重取。",
+      "properties": {
+        "at": { "type": "number", "description": "写入时间戳。" },
+        "raw": { "type": "object", "description": "解析后的原始邮件结构（字段见 parse.ts RawMail）。", "properties": {}, "required": [], "additionalProperties": true }
+      },
+      "required": ["at", "raw"],
+      "additionalProperties": false
+    },
+    "bodyIndexMap": {
+      "type": "object",
+      "description": "正文缓存索引：键 mail-body:<accountId>:<messageId>，值为 {at,bytes}；按写入时间淘汰。",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+    },
+    "appearanceSettings": {
+      "type": "object",
+      "description": "插件外观：跟随 Studio 或自定义字体、字号、圆角、控件高度、边框、间距、字距、强调色、背景压暗与模糊。",
+      "properties": {
+        "followStudio": { "type": "boolean", "description": "是否跟随 Ekko Studio 主题的字体与几何参数。" },
+        "font": { "type": "string", "enum": ["comic", "system", "serif", "mono"], "description": "自定义字体方案；followStudio=true 时忽略。" },
+        "fontSize": { "type": "number", "minimum": 12, "maximum": 20, "description": "基础字号 px。" },
+        "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "全局圆角 px。" },
+        "controlHeight": { "type": "number", "minimum": 30, "maximum": 56, "description": "控件高度 px。" },
+        "borderWidth": { "type": "number", "minimum": 1, "maximum": 4, "description": "边框宽度 px。" },
+        "spacing": { "type": "number", "minimum": 0.8, "maximum": 1.6, "description": "间距比例。" },
+        "letterSpacing": { "type": "number", "minimum": -1.5, "maximum": 1.5, "description": "字间距 px。" },
+        "accent": { "type": "string", "minLength": 7, "maxLength": 7, "description": "强调色 #rrggbb。" },
+        "overlay": { "type": "number", "minimum": 0, "maximum": 0.85, "description": "背景压暗不透明度。" },
+        "blur": { "type": "number", "minimum": 0, "maximum": 24, "description": "背景模糊 px。" },
+        "backgroundName": { "type": "string", "maxLength": 120, "description": "自定义背景文件名。" }
+      },
+      "required": ["followStudio", "font", "fontSize", "radius", "controlHeight", "borderWidth", "spacing", "letterSpacing", "accent", "overlay", "blur", "backgroundName"],
+      "additionalProperties": false
+    },
+    "storedDataUrl": {
+      "type": "string",
+      "description": "旧版自定义背景 data URL，仅用于迁移，最长 1.8MB 字符。",
+      "maxLength": 1800000
+    },
+    "appearanceBackgroundName": {
+      "type": "string",
+      "description": "自定义背景图片原文件名。",
+      "maxLength": 120
+    },
+    "storedTimestamp": {
+      "type": "number",
+      "description": "Unix 毫秒时间戳。"
+    },
+    "appearanceSaveInput": {
+      "type": "object",
+      "description": "保存外观设置；__requestId 为客户端调用信封字段。",
+      "properties": {
+        "followStudio": { "type": "boolean", "description": "是否跟随 Ekko Studio 主题。" },
+        "font": { "type": "string", "enum": ["comic", "system", "serif", "mono"], "description": "自定义字体方案。" },
+        "fontSize": { "type": "number", "minimum": 12, "maximum": 20, "description": "基础字号 px。" },
+        "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "全局圆角 px。" },
+        "controlHeight": { "type": "number", "minimum": 30, "maximum": 56, "description": "控件高度 px。" },
+        "borderWidth": { "type": "number", "minimum": 1, "maximum": 4, "description": "边框宽度 px。" },
+        "spacing": { "type": "number", "minimum": 0.8, "maximum": 1.6, "description": "间距比例。" },
+        "letterSpacing": { "type": "number", "minimum": -1.5, "maximum": 1.5, "description": "字间距 px。" },
+        "accent": { "type": "string", "minLength": 7, "maxLength": 7, "description": "强调色 #rrggbb。" },
+        "overlay": { "type": "number", "minimum": 0, "maximum": 0.85, "description": "背景压暗不透明度。" },
+        "blur": { "type": "number", "minimum": 0, "maximum": 24, "description": "背景模糊 px。" },
+        "backgroundName": { "type": "string", "maxLength": 120, "description": "背景文件名。" },
+        "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：客户端请求标识。" }
+      },
+      "required": ["followStudio", "font", "fontSize", "radius", "controlHeight", "borderWidth", "spacing", "letterSpacing", "accent", "overlay", "blur", "backgroundName"],
+      "additionalProperties": false
+    },
+    "appearanceOutput": {
+      "type": "object",
+      "description": "当前外观；背景以文件保存，读取时按块传回。",
+      "properties": {
+        "settings": { "type": "object", "description": "外观设置（字段见 appearanceSettings）。", "properties": {}, "required": [], "additionalProperties": true },
+        "hasBackground": { "type": "boolean", "description": "是否已有自定义背景。" },
+        "backgroundName": { "type": "string", "maxLength": 120, "description": "背景文件名。" },
+        "backgroundMime": { "type": "string", "maxLength": 40, "description": "背景 MIME 类型。" },
+        "backgroundBytes": { "type": "number", "description": "背景文件字节数。" },
+        "updatedAt": { "type": "number", "description": "最近一次外观修改时间戳。" }
+      },
+      "required": ["settings", "hasBackground", "updatedAt"],
+      "additionalProperties": false
+    },
+    "appearanceSaveOutput": {
+      "type": "object",
+      "description": "外观保存结果。",
+      "properties": { "saved": { "type": "boolean", "description": "是否已保存。" } },
+      "required": ["saved"],
+      "additionalProperties": false
+    },
+    "appearanceBackgroundMeta": {
+      "type": "object",
+      "description": "背景文件元数据；图片正文存放在 dataDir，不占插件命名空间。",
+      "properties": {
+        "name": { "type": "string", "maxLength": 120, "description": "文件名。" },
+        "mime": { "type": "string", "maxLength": 40, "description": "MIME 类型。" },
+        "bytes": { "type": "number", "description": "文件字节数。" },
+        "updatedAt": { "type": "number", "description": "保存时间戳。" }
+      },
+      "required": ["name", "mime", "bytes", "updatedAt"],
+      "additionalProperties": false
+    },
+    "appearanceBackgroundStartInput": {
+      "type": "object",
+      "description": "开始分块上传背景。",
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120, "description": "文件名。" },
+        "mime": { "type": "string", "enum": ["image/jpeg", "image/png", "image/webp"], "description": "图片类型。" },
+        "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }
+      },
+      "required": ["name", "mime"],
+      "additionalProperties": false
+    },
+    "appearanceBackgroundStartOutput": {
+      "type": "object",
+      "description": "上传会话 ID。",
+      "properties": { "uploadId": { "type": "string", "maxLength": 64, "description": "临时上传 ID。" } },
+      "required": ["uploadId"],
+      "additionalProperties": false
+    },
+    "appearanceBackgroundChunkInput": {
+      "type": "object",
+      "description": "追加一段 base64 背景数据。",
+      "properties": {
+        "uploadId": { "type": "string", "maxLength": 64, "description": "上传会话 ID。" },
+        "data": { "type": "string", "maxLength": 900000, "description": "base64 片段，长度为 4 的倍数。" },
+        "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }
+      },
+      "required": ["uploadId", "data"],
+      "additionalProperties": false
+    },
+    "appearanceBackgroundChunkOutput": {
+      "type": "object",
+      "description": "已接收字节数。",
+      "properties": { "received": { "type": "number", "description": "累计字节数。" } },
+      "required": ["received"],
+      "additionalProperties": false
+    },
+    "appearanceBackgroundCompleteInput": {
+      "type": "object",
+      "description": "提交背景上传会话。",
+      "properties": {
+        "uploadId": { "type": "string", "maxLength": 64, "description": "上传会话 ID。" },
+        "name": { "type": "string", "maxLength": 120, "description": "文件名。" },
+        "mime": { "type": "string", "enum": ["image/jpeg", "image/png", "image/webp"], "description": "图片类型。" },
+        "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }
+      },
+      "required": ["uploadId", "name", "mime"],
+      "additionalProperties": false
+    },
+    "appearanceBackgroundCompleteOutput": {
+      "type": "object",
+      "description": "背景提交结果。",
+      "properties": {
+        "saved": { "type": "boolean", "description": "是否已保存。" },
+        "name": { "type": "string", "maxLength": 120, "description": "文件名。" },
+        "bytes": { "type": "number", "description": "文件字节数。" }
+      },
+      "required": ["saved", "name", "bytes"],
+      "additionalProperties": false
+    },
+    "appearanceBackgroundReadInput": {
+      "type": "object",
+      "description": "按字节偏移读取背景文件。",
+      "properties": {
+        "offset": { "type": "number", "minimum": 0, "description": "字节偏移。" },
+        "length": { "type": "number", "minimum": 1, "maximum": 700000, "description": "可选读取字节数。" },
+        "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }
+      },
+      "required": ["offset"],
+      "additionalProperties": false
+    },
+    "appearanceBackgroundReadOutput": {
+      "type": "object",
+      "description": "背景文件的一段 base64 数据。",
+      "properties": {
+        "data": { "type": "string", "maxLength": 950000, "description": "base64 片段。" },
+        "nextOffset": { "type": "number", "description": "下一段偏移。" },
+        "eof": { "type": "boolean", "description": "是否已到文件末尾。" }
+      },
+      "required": ["data", "nextOffset", "eof"],
+      "additionalProperties": false
+    },
+    "appearanceClearOutput": {
+      "type": "object",
+      "description": "背景清除结果。",
+      "properties": { "cleared": { "type": "boolean", "description": "是否已清除。" } },
+      "required": ["cleared"],
+      "additionalProperties": false
+    },
+    "appearanceResetOutput": {
+      "type": "object",
+      "description": "外观恢复默认结果。",
+      "properties": { "reset": { "type": "boolean", "description": "是否已重置。" } },
+      "required": ["reset"],
+      "additionalProperties": false
+    },
+    "rssFolder": { "type": "object", "description": "阅读分组及其未读数。", "properties": { "id": { "type": "string", "description": "分组 ID。" }, "name": { "type": "string", "maxLength": 30, "description": "分组名称。" }, "createdAt": { "type": "number", "description": "创建时间戳。" }, "unread": { "type": "number", "minimum": 0, "description": "分组内未读文章数。" } }, "required": ["id", "name", "createdAt"], "additionalProperties": false },
+    "rssFeed": { "type": "object", "description": "RSS/Atom/JSON Feed 订阅源。", "properties": { "id": { "type": "string", "description": "订阅源 ID。" }, "url": { "type": "string", "description": "订阅地址。" }, "title": { "type": "string", "description": "订阅标题。" }, "siteUrl": { "type": "string", "description": "站点地址。" }, "description": { "type": "string", "description": "订阅描述。" }, "icon": { "type": "string", "description": "订阅图标地址。" }, "folderId": { "type": "string", "description": "所属分组 ID。" }, "enabled": { "type": "boolean", "description": "是否参与轮询。" }, "lastFetchedAt": { "type": "number", "description": "最近抓取时间戳。" }, "lastError": { "type": "string", "maxLength": 200, "description": "最近抓取错误。" }, "unread": { "type": "number", "minimum": 0, "description": "未读文章数。" } }, "required": ["id", "url", "title", "siteUrl", "description", "icon", "enabled"], "additionalProperties": false },
+    "rssSummary": { "type": "object", "description": "AI 生成的文章摘要。", "properties": { "tldr": { "type": "string", "maxLength": 160, "description": "一句话摘要。" }, "points": { "type": "array", "maxItems": 8, "items": { "type": "string", "description": "要点。" }, "description": "要点列表。" }, "whyRead": { "type": "string", "maxLength": 240, "description": "推荐理由。" }, "tags": { "type": "array", "maxItems": 8, "items": { "type": "string", "description": "标签。" }, "description": "标签列表。" }, "model": { "type": "string", "description": "生成摘要的模型。" }, "createdAt": { "type": "number", "description": "生成时间戳。" } }, "required": ["tldr", "points", "whyRead", "tags", "model", "createdAt"], "additionalProperties": false },
+    "rssEntryItem": { "type": "object", "description": "文章列表项。", "properties": { "id": { "type": "string", "description": "文章 ID。" }, "feedId": { "type": "string", "description": "订阅源 ID。" }, "feedTitle": { "type": "string", "description": "订阅源标题。" }, "feedIcon": { "type": "string", "description": "订阅源图标。" }, "title": { "type": "string", "description": "文章标题。" }, "url": { "type": "string", "description": "原文地址。" }, "author": { "type": "string", "description": "作者。" }, "publishedAt": { "type": "number", "description": "发布时间戳。" }, "snippet": { "type": "string", "description": "摘要片段。" }, "read": { "type": "boolean", "description": "是否已读。" }, "starred": { "type": "boolean", "description": "是否收藏。" }, "hasSummary": { "type": "boolean", "description": "是否已有 AI 摘要。" }, "image": { "type": "string", "description": "配图地址。" } }, "required": ["id", "feedId", "feedTitle", "title", "url", "publishedAt", "snippet", "read", "starred", "hasSummary"], "additionalProperties": false },
+    "rssEntry": { "type": "object", "description": "文章详情与正文。", "properties": { "id": { "type": "string", "description": "文章 ID。" }, "feedId": { "type": "string", "description": "订阅源 ID。" }, "feedTitle": { "type": "string", "description": "订阅源标题。" }, "feedIcon": { "type": "string", "description": "订阅源图标。" }, "title": { "type": "string", "description": "文章标题。" }, "url": { "type": "string", "description": "原文地址。" }, "author": { "type": "string", "description": "作者。" }, "publishedAt": { "type": "number", "description": "发布时间戳。" }, "snippet": { "type": "string", "description": "摘要片段。" }, "read": { "type": "boolean", "description": "是否已读。" }, "starred": { "type": "boolean", "description": "是否收藏。" }, "hasSummary": { "type": "boolean", "description": "是否已有 AI 摘要。" }, "image": { "type": "string", "description": "配图地址。" }, "contentHtml": { "type": "string", "description": "清洗后的正文 HTML。" }, "contentText": { "type": "string", "description": "正文纯文本。" }, "fetchedAt": { "type": "number", "description": "入库时间戳。" }, "summary": { "type": "object", "description": "已缓存的 AI 摘要。", "properties": { "tldr": { "type": "string", "description": "一句话摘要。" }, "points": { "type": "array", "items": { "type": "string", "description": "要点。" }, "description": "要点列表。" }, "whyRead": { "type": "string", "description": "推荐理由。" }, "tags": { "type": "array", "items": { "type": "string", "description": "标签。" }, "description": "标签列表。" }, "model": { "type": "string", "description": "生成模型。" }, "createdAt": { "type": "number", "description": "生成时间戳。" } }, "required": ["tldr", "points", "whyRead", "tags", "model", "createdAt"], "additionalProperties": false } }, "required": ["id", "feedId", "feedTitle", "title", "url", "publishedAt", "snippet", "read", "starred", "hasSummary", "contentHtml", "contentText", "fetchedAt"], "additionalProperties": false },
+    "rssEntryPage": { "type": "object", "description": "分页文章列表。", "properties": { "items": { "type": "array", "description": "当前页文章。", "items": { "type": "object", "description": "文章列表项。", "properties": { "id": { "type": "string", "description": "文章 ID。" }, "feedId": { "type": "string", "description": "订阅源 ID。" }, "feedTitle": { "type": "string", "description": "订阅源标题。" }, "feedIcon": { "type": "string", "description": "订阅源图标。" }, "title": { "type": "string", "description": "文章标题。" }, "url": { "type": "string", "description": "原文地址。" }, "author": { "type": "string", "description": "作者。" }, "publishedAt": { "type": "number", "description": "发布时间戳。" }, "snippet": { "type": "string", "description": "摘要片段。" }, "read": { "type": "boolean", "description": "是否已读。" }, "starred": { "type": "boolean", "description": "是否收藏。" }, "hasSummary": { "type": "boolean", "description": "是否已有 AI 摘要。" }, "image": { "type": "string", "description": "配图地址。" } }, "required": ["id", "feedId", "feedTitle", "title", "url", "publishedAt", "snippet", "read", "starred", "hasSummary"], "additionalProperties": false } }, "nextCursor": { "type": "number", "minimum": 0, "description": "下一页偏移。" }, "total": { "type": "number", "minimum": 0, "description": "筛选结果总数。" }, "unread": { "type": "number", "minimum": 0, "description": "筛选结果中的未读数。" } }, "required": ["items", "total", "unread"], "additionalProperties": false },
+    "rssDigest": { "type": "object", "description": "AI 阅读简报。", "properties": { "id": { "type": "string", "description": "简报 ID。" }, "title": { "type": "string", "maxLength": 80, "description": "简报标题。" }, "overview": { "type": "string", "maxLength": 600, "description": "总览。" }, "sections": { "type": "array", "maxItems": 6, "description": "分节内容。", "items": { "type": "object", "description": "简报分节。", "properties": { "name": { "type": "string", "description": "分节名称。" }, "items": { "type": "array", "maxItems": 6, "description": "分节条目。", "items": { "type": "object", "description": "简报条目。", "properties": { "entryId": { "type": "string", "description": "关联文章 ID。" }, "title": { "type": "string", "description": "文章标题。" }, "url": { "type": "string", "description": "原文地址。" }, "line": { "type": "string", "maxLength": 240, "description": "一句话说明。" }, "source": { "type": "string", "description": "订阅源名称。" } }, "required": ["entryId", "title", "url", "line", "source"], "additionalProperties": false } } }, "required": ["name", "items"], "additionalProperties": false } }, "period": { "type": "string", "enum": ["day", "week"], "description": "简报周期。" }, "createdAt": { "type": "number", "description": "生成时间戳。" } }, "required": ["id", "title", "overview", "sections", "period", "createdAt"], "additionalProperties": false },
+    "rssSettings": { "type": "object", "description": "阅读模块设置。", "properties": { "summaryProvider": { "type": "string", "enum": ["hostModel", "openai"], "description": "摘要服务。" }, "summaryModel": { "type": "string", "description": "摘要模型 ID。" }, "summaryLang": { "type": "string", "enum": ["zh", "en"], "description": "摘要语言。" }, "autoSummary": { "type": "boolean", "description": "打开文章时自动生成摘要。" }, "pollMinutes": { "type": "number", "minimum": 5, "maximum": 120, "description": "轮询间隔分钟。" }, "retentionDays": { "type": "number", "minimum": 7, "maximum": 365, "description": "文章保留天数。" }, "maxEntriesPerFeed": { "type": "number", "minimum": 50, "maximum": 2000, "description": "每源文章上限。" }, "fullText": { "type": "boolean", "description": "是否提取全文。" }, "remoteImages": { "type": "boolean", "description": "是否显示远程图片。" }, "articleTheme": { "type": "string", "enum": ["paper", "sepia", "dark"], "description": "正文主题；旧设置缺省为 paper。" }, "articleFont": { "type": "string", "enum": ["serif", "sans", "mono"], "description": "正文字体；旧设置缺省为 serif。" }, "articleFontSize": { "type": "number", "minimum": 12, "maximum": 24, "description": "正文字号 px，默认 16。" }, "articleLineHeight": { "type": "number", "minimum": 1.4, "maximum": 2.4, "description": "正文行高，默认 1.85。" }, "articleWidth": { "type": "number", "minimum": 520, "maximum": 1024, "description": "正文版心宽度 px，默认 720。" }, "articleCustomCss": { "type": "string", "maxLength": 12000, "description": "追加到正文 iframe 的自定义 CSS；url()、@import 与固定定位在渲染时移除。" } }, "required": ["summaryProvider", "summaryModel", "summaryLang", "autoSummary", "pollMinutes", "retentionDays", "maxEntriesPerFeed", "fullText", "remoteImages", "articleTheme", "articleFont", "articleFontSize", "articleLineHeight", "articleWidth", "articleCustomCss"], "additionalProperties": false },
+    "rssBootstrap": { "type": "object", "description": "阅读模块首屏数据。", "properties": { "folders": { "type": "array", "description": "全部分组。", "items": { "type": "object", "description": "阅读分组。", "properties": { "id": { "type": "string", "description": "分组 ID。" }, "name": { "type": "string", "description": "分组名称。" }, "createdAt": { "type": "number", "description": "创建时间戳。" }, "unread": { "type": "number", "minimum": 0, "description": "未读数。" } }, "required": ["id", "name", "createdAt"], "additionalProperties": false } }, "feeds": { "type": "array", "description": "全部订阅源。", "items": { "type": "object", "description": "订阅源。", "properties": { "id": { "type": "string", "description": "订阅源 ID。" }, "url": { "type": "string", "description": "订阅地址。" }, "title": { "type": "string", "description": "订阅标题。" }, "siteUrl": { "type": "string", "description": "站点地址。" }, "description": { "type": "string", "description": "订阅描述。" }, "icon": { "type": "string", "description": "图标地址。" }, "folderId": { "type": "string", "description": "分组 ID。" }, "enabled": { "type": "boolean", "description": "是否参与轮询。" }, "lastFetchedAt": { "type": "number", "description": "最近抓取时间。" }, "lastError": { "type": "string", "maxLength": 200, "description": "最近错误。" }, "unread": { "type": "number", "minimum": 0, "description": "未读数。" } }, "required": ["id", "url", "title", "siteUrl", "description", "icon", "enabled"], "additionalProperties": false } }, "settings": { "type": "object", "description": "阅读设置。", "properties": { "summaryProvider": { "type": "string", "enum": ["hostModel", "openai"], "description": "摘要服务。" }, "summaryModel": { "type": "string", "description": "摘要模型。" }, "summaryLang": { "type": "string", "enum": ["zh", "en"], "description": "摘要语言。" }, "autoSummary": { "type": "boolean", "description": "自动摘要。" }, "pollMinutes": { "type": "number", "minimum": 5, "maximum": 120, "description": "轮询间隔。" }, "retentionDays": { "type": "number", "minimum": 7, "maximum": 365, "description": "保留天数。" }, "maxEntriesPerFeed": { "type": "number", "minimum": 50, "maximum": 2000, "description": "每源上限。" }, "fullText": { "type": "boolean", "description": "提取全文。" }, "remoteImages": { "type": "boolean", "description": "显示远程图片。" }, "articleTheme": { "type": "string", "enum": ["paper", "sepia", "dark"], "description": "正文主题。" }, "articleFont": { "type": "string", "enum": ["serif", "sans", "mono"], "description": "正文字体。" }, "articleFontSize": { "type": "number", "description": "正文字号。" }, "articleLineHeight": { "type": "number", "description": "正文行高。" }, "articleWidth": { "type": "number", "description": "正文版心宽度。" }, "articleCustomCss": { "type": "string", "maxLength": 12000, "description": "自定义 CSS。" } }, "required": ["summaryProvider", "summaryModel", "summaryLang", "autoSummary", "pollMinutes", "retentionDays", "maxEntriesPerFeed", "fullText", "remoteImages", "articleTheme", "articleFont", "articleFontSize", "articleLineHeight", "articleWidth", "articleCustomCss"], "additionalProperties": false }, "counts": { "type": "object", "description": "阅读统计。", "properties": { "feeds": { "type": "number", "minimum": 0, "description": "订阅数。" }, "unread": { "type": "number", "minimum": 0, "description": "未读数。" }, "today": { "type": "number", "minimum": 0, "description": "今日文章数。" }, "starred": { "type": "number", "minimum": 0, "description": "收藏数。" } }, "required": ["feeds", "unread", "today", "starred"], "additionalProperties": false }, "lastSyncAt": { "type": "number", "description": "最近同步时间。" }, "digest": { "type": "object", "description": "最近简报。", "properties": { "id": { "type": "string", "description": "简报 ID。" }, "title": { "type": "string", "maxLength": 80, "description": "标题。" }, "overview": { "type": "string", "maxLength": 600, "description": "总览。" }, "sections": { "type": "array", "maxItems": 6, "description": "分节。", "items": { "type": "object", "description": "分节内容。", "properties": { "name": { "type": "string", "description": "分节名称。" }, "items": { "type": "array", "maxItems": 6, "description": "条目。", "items": { "type": "object", "description": "简报条目。", "properties": { "entryId": { "type": "string", "description": "文章 ID。" }, "title": { "type": "string", "description": "标题。" }, "url": { "type": "string", "description": "原文地址。" }, "line": { "type": "string", "maxLength": 240, "description": "说明。" }, "source": { "type": "string", "description": "来源。" } }, "required": ["entryId", "title", "url", "line", "source"], "additionalProperties": false } } }, "required": ["name", "items"], "additionalProperties": false } }, "period": { "type": "string", "enum": ["day", "week"], "description": "周期。" }, "createdAt": { "type": "number", "description": "生成时间。" } }, "required": ["id", "title", "overview", "sections", "period", "createdAt"], "additionalProperties": false } }, "required": ["folders", "feeds", "settings", "counts"], "additionalProperties": false },
+    "rssFolderInput": { "type": "object", "description": "新建或删除阅读分组。", "properties": { "name": { "type": "string", "maxLength": 30, "description": "分组名称。" }, "id": { "type": "string", "description": "分组 ID。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": [], "additionalProperties": false },
+    "rssFeedAddInput": { "type": "object", "description": "添加订阅。", "properties": { "url": { "type": "string", "maxLength": 2000, "description": "订阅地址。" }, "folderId": { "type": "string", "description": "目标分组 ID。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": ["url"], "additionalProperties": false },
+    "rssFeedMoveInput": { "type": "object", "description": "把订阅源移动到分组或移出分组。", "properties": { "id": { "type": "string", "description": "订阅源 ID。" }, "folderId": { "type": "string", "description": "目标分组 ID；省略表示未分组。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": ["id"], "additionalProperties": false },
+    "rssReorderInput": { "type": "object", "description": "保存分组或订阅源的拖拽排序。", "properties": { "ids": { "type": "array", "maxItems": 2000, "description": "按显示顺序排列的 ID。", "items": { "type": "string", "maxLength": 64, "description": "分组或订阅源 ID。" } }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": ["ids"], "additionalProperties": false },
+    "rssIdInput": { "type": "object", "description": "按 ID 操作订阅或文章。", "properties": { "id": { "type": "string", "description": "目标 ID。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": ["id"], "additionalProperties": false },
+    "rssRefreshInput": { "type": "object", "description": "刷新全部或单个订阅。", "properties": { "id": { "type": "string", "description": "订阅源 ID；省略表示全部。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": [], "additionalProperties": false },
+    "rssEntriesInput": { "type": "object", "description": "文章列表筛选与分页。", "properties": { "folderId": { "type": "string", "description": "分组 ID。" }, "feedId": { "type": "string", "description": "订阅源 ID。" }, "view": { "type": "string", "enum": ["all", "unread", "starred"], "description": "列表视图。" }, "query": { "type": "string", "maxLength": 200, "description": "关键词。" }, "cursor": { "type": "number", "minimum": 0, "description": "偏移量。" }, "limit": { "type": "number", "minimum": 1, "maximum": 100, "description": "每页条数。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": [], "additionalProperties": false },
+    "rssMarkAllReadInput": { "type": "object", "description": "把当前筛选范围内的文章标为已读。", "properties": { "folderId": { "type": "string", "description": "分组 ID。" }, "feedId": { "type": "string", "description": "订阅源 ID。" }, "view": { "type": "string", "enum": ["all", "unread", "starred"], "description": "列表视图。" }, "query": { "type": "string", "maxLength": 200, "description": "关键词。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": [], "additionalProperties": false },
+    "rssEntryActionInput": { "type": "object", "description": "设置文章已读或收藏状态。", "properties": { "id": { "type": "string", "description": "文章 ID。" }, "read": { "type": "boolean", "description": "已读状态。" }, "starred": { "type": "boolean", "description": "收藏状态。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": ["id"], "additionalProperties": false },
+    "rssSummaryInput": { "type": "object", "description": "生成文章摘要。", "properties": { "id": { "type": "string", "description": "文章 ID。" }, "lang": { "type": "string", "enum": ["zh", "en"], "description": "摘要语言。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": ["id"], "additionalProperties": false },
+    "rssDigestInput": { "type": "object", "description": "生成阅读简报。", "properties": { "period": { "type": "string", "enum": ["day", "week"], "description": "简报周期。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": [], "additionalProperties": false },
+    "rssSettingsInput": { "type": "object", "description": "保存阅读设置。", "properties": { "summaryProvider": { "type": "string", "enum": ["hostModel", "openai"], "description": "摘要服务。" }, "summaryModel": { "type": "string", "maxLength": 200, "description": "摘要模型。" }, "summaryLang": { "type": "string", "enum": ["zh", "en"], "description": "摘要语言。" }, "autoSummary": { "type": "boolean", "description": "自动摘要。" }, "pollMinutes": { "type": "number", "minimum": 5, "maximum": 120, "description": "轮询间隔。" }, "retentionDays": { "type": "number", "minimum": 7, "maximum": 365, "description": "保留天数。" }, "maxEntriesPerFeed": { "type": "number", "minimum": 50, "maximum": 2000, "description": "每源上限。" }, "fullText": { "type": "boolean", "description": "提取全文。" }, "remoteImages": { "type": "boolean", "description": "显示远程图片。" }, "articleTheme": { "type": "string", "enum": ["paper", "sepia", "dark"], "description": "正文主题。" }, "articleFont": { "type": "string", "enum": ["serif", "sans", "mono"], "description": "正文字体。" }, "articleFontSize": { "type": "number", "minimum": 12, "maximum": 24, "description": "正文字号 px。" }, "articleLineHeight": { "type": "number", "minimum": 1.4, "maximum": 2.4, "description": "正文行高。" }, "articleWidth": { "type": "number", "minimum": 520, "maximum": 1024, "description": "正文版心宽度 px。" }, "articleCustomCss": { "type": "string", "maxLength": 12000, "description": "自定义 CSS。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": [], "additionalProperties": false },
+    "rssOpmlInput": { "type": "object", "description": "导入 OPML 订阅列表。", "properties": { "content": { "type": "string", "maxLength": 2000000, "description": "OPML 文本。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": ["content"], "additionalProperties": false },
+    "rssFolderOutput": { "type": "object", "description": "新建分组结果。", "properties": { "folder": { "type": "object", "description": "分组。", "properties": { "id": { "type": "string", "description": "分组 ID。" }, "name": { "type": "string", "description": "名称。" }, "createdAt": { "type": "number", "description": "创建时间。" }, "unread": { "type": "number", "minimum": 0, "description": "未读数。" } }, "required": ["id", "name", "createdAt"], "additionalProperties": false } }, "required": ["folder"], "additionalProperties": false },
+    "rssFeedOutput": { "type": "object", "description": "添加订阅结果。", "properties": { "feed": { "type": "object", "description": "订阅源。", "properties": { "id": { "type": "string", "description": "订阅源 ID。" }, "url": { "type": "string", "description": "订阅地址。" }, "title": { "type": "string", "description": "标题。" }, "siteUrl": { "type": "string", "description": "站点地址。" }, "description": { "type": "string", "description": "描述。" }, "icon": { "type": "string", "description": "图标。" }, "folderId": { "type": "string", "description": "分组 ID。" }, "enabled": { "type": "boolean", "description": "是否启用。" }, "lastFetchedAt": { "type": "number", "description": "最近抓取时间。" }, "lastError": { "type": "string", "maxLength": 200, "description": "最近错误。" }, "unread": { "type": "number", "minimum": 0, "description": "未读数。" } }, "required": ["id", "url", "title", "siteUrl", "description", "icon", "enabled"], "additionalProperties": false } }, "required": ["feed"], "additionalProperties": false },
+    "rssRefreshOutput": { "type": "object", "description": "订阅刷新结果。", "properties": { "checked": { "type": "number", "minimum": 0, "description": "检查的订阅数。" }, "newEntries": { "type": "number", "minimum": 0, "description": "新增文章数。" }, "failed": { "type": "number", "minimum": 0, "description": "失败订阅数。" }, "skipped": { "type": "boolean", "description": "是否因轮询间隔跳过。" } }, "required": ["checked", "newEntries", "failed"], "additionalProperties": false },
+    "rssSummaryOutput": { "type": "object", "description": "文章摘要结果。", "properties": { "summary": { "type": "object", "description": "摘要。", "properties": { "tldr": { "type": "string", "description": "一句话摘要。" }, "points": { "type": "array", "description": "要点。", "items": { "type": "string", "description": "要点。" } }, "whyRead": { "type": "string", "description": "推荐理由。" }, "tags": { "type": "array", "description": "标签。", "items": { "type": "string", "description": "标签。" } }, "model": { "type": "string", "description": "模型。" }, "createdAt": { "type": "number", "description": "生成时间。" } }, "required": ["tldr", "points", "whyRead", "tags", "model", "createdAt"], "additionalProperties": false } }, "required": ["summary"], "additionalProperties": false },
+    "rssDigestOutput": { "type": "object", "description": "阅读简报结果。", "properties": { "digest": { "type": "object", "description": "简报。", "properties": { "id": { "type": "string", "description": "简报 ID。" }, "title": { "type": "string", "description": "标题。" }, "overview": { "type": "string", "description": "总览。" }, "sections": { "type": "array", "description": "分节。", "items": { "type": "object", "description": "分节。", "properties": { "name": { "type": "string", "description": "名称。" }, "items": { "type": "array", "description": "条目。", "items": { "type": "object", "description": "条目。", "properties": { "entryId": { "type": "string", "description": "文章 ID。" }, "title": { "type": "string", "description": "标题。" }, "url": { "type": "string", "description": "原文地址。" }, "line": { "type": "string", "description": "说明。" }, "source": { "type": "string", "description": "来源。" } }, "required": ["entryId", "title", "url", "line", "source"], "additionalProperties": false } } }, "required": ["name", "items"], "additionalProperties": false } }, "period": { "type": "string", "enum": ["day", "week"], "description": "周期。" }, "createdAt": { "type": "number", "description": "生成时间。" } }, "required": ["id", "title", "overview", "sections", "period", "createdAt"], "additionalProperties": false } }, "required": [], "additionalProperties": false },
+    "rssSettingsOutput": { "type": "object", "description": "阅读设置结果。", "properties": { "aiConfigured": { "type": "boolean", "description": "摘要服务是否已完整配置。" }, "settings": { "type": "object", "description": "设置。", "properties": { "summaryProvider": { "type": "string", "enum": ["hostModel", "openai"], "description": "摘要服务。" }, "summaryModel": { "type": "string", "description": "模型。" }, "summaryLang": { "type": "string", "enum": ["zh", "en"], "description": "语言。" }, "autoSummary": { "type": "boolean", "description": "自动摘要。" }, "pollMinutes": { "type": "number", "description": "轮询间隔。" }, "retentionDays": { "type": "number", "description": "保留天数。" }, "maxEntriesPerFeed": { "type": "number", "description": "每源上限。" }, "fullText": { "type": "boolean", "description": "提取全文。" }, "remoteImages": { "type": "boolean", "description": "远程图片。" }, "articleTheme": { "type": "string", "enum": ["paper", "sepia", "dark"], "description": "正文主题。" }, "articleFont": { "type": "string", "enum": ["serif", "sans", "mono"], "description": "正文字体。" }, "articleFontSize": { "type": "number", "description": "正文字号。" }, "articleLineHeight": { "type": "number", "description": "正文行高。" }, "articleWidth": { "type": "number", "description": "正文版心宽度。" }, "articleCustomCss": { "type": "string", "description": "自定义 CSS。" } }, "required": ["summaryProvider", "summaryModel", "summaryLang", "autoSummary", "pollMinutes", "retentionDays", "maxEntriesPerFeed", "fullText", "remoteImages", "articleTheme", "articleFont", "articleFontSize", "articleLineHeight", "articleWidth", "articleCustomCss"], "additionalProperties": false } }, "required": ["aiConfigured", "settings"], "additionalProperties": false },
+    "rssOpmlOutput": { "type": "object", "description": "导出的 OPML 文本。", "properties": { "content": { "type": "string", "description": "OPML 文本。" } }, "required": ["content"], "additionalProperties": false },
+    "rssImportOutput": { "type": "object", "description": "OPML 导入结果。", "properties": { "imported": { "type": "number", "minimum": 0, "description": "导入数。" }, "skipped": { "type": "number", "minimum": 0, "description": "跳过数。" } }, "required": ["imported", "skipped"], "additionalProperties": false },
+    "rssOkOutput": { "type": "object", "description": "文章状态写入结果。", "properties": { "ok": { "type": "boolean", "description": "是否成功。" } }, "required": ["ok"], "additionalProperties": false },
+    "rssRemovedOutput": { "type": "object", "description": "删除结果。", "properties": { "removed": { "type": "boolean", "description": "是否已删除。" } }, "required": ["removed"], "additionalProperties": false },
+    "rssUpdatedEvent": { "type": "object", "description": "后台抓取发现新文章的事件。", "properties": { "newCount": { "type": "number", "minimum": 0, "description": "新增文章数。" }, "at": { "type": "number", "description": "事件时间。" } }, "required": ["newCount", "at"], "additionalProperties": false }
+  },
+  "rpc": {
+    "app.bootstrap": { "description": "首屏数据：Provider 概览、账号、语言表与 vault 提示。", "input": "requestIdOnly", "output": "bootstrapOutput" },
+    "app.cancel": { "description": "按 requestId 取消进行中的操作；直接返回 Result 信封。", "input": "cancelInput", "output": "cancelResult" },
+    "app.diagnostics": { "description": "读取最近 100 条脱敏诊断。", "input": "requestIdOnly", "output": "diagnosticsOutput" },
+    "translate.run": { "description": "执行一次真实 Provider 文本翻译并写入历史。", "input": "translateInput", "output": "translationJob" },
+    "translate.retry": { "description": "按 jobId 重译历史作业，可选换 Provider。", "input": "retryInput", "output": "translationJob" },
+    "translate.history": { "description": "查询翻译历史，服务端裁剪到 50 条。", "input": "historyInput", "output": "translationJobList" },
+    "translate.test": { "description": "向选定 Provider 发送短测试文本，返回连通性、耗时与错误；不写历史或缓存。", "input": "providerTestInput", "output": "providerTestResult" },
+    "translate.cache-stats": { "description": "读取当前身份分区的翻译缓存条目数与字节数。", "input": "requestIdOnly", "output": "cacheStats" },
+    "translate.cache-clear": { "description": "清空当前身份分区的翻译缓存，返回删除条数。", "input": "requestIdOnly", "output": "cacheStats" },
+    "settings.get": { "description": "回显设置；密钥只回传 configured，不回明文。", "input": "requestIdOnly", "output": "settingsGetOutput" },
+    "settings.save": { "description": "保存偏好与百度凭据；secret 经一次 RPC 进入加密 vault。", "input": "settingsSaveInput", "output": "settingsSaveOutput" },
+    "appearance.get": { "description": "读取插件外观设置与自定义背景。", "input": "requestIdOnly", "output": "appearanceOutput" },
+    "appearance.save": { "description": "保存插件外观设置。", "input": "appearanceSaveInput", "output": "appearanceSaveOutput" },
+    "appearance.background-start": { "description": "开始分块上传自定义背景原图。", "input": "appearanceBackgroundStartInput", "output": "appearanceBackgroundStartOutput" },
+    "appearance.background-chunk": { "description": "追加一段背景原图 base64 数据。", "input": "appearanceBackgroundChunkInput", "output": "appearanceBackgroundChunkOutput" },
+    "appearance.background-complete": { "description": "校验并原子保存背景原图。", "input": "appearanceBackgroundCompleteInput", "output": "appearanceBackgroundCompleteOutput" },
+    "appearance.background-read": { "description": "按字节偏移分块读取背景原图。", "input": "appearanceBackgroundReadInput", "output": "appearanceBackgroundReadOutput" },
+    "appearance.background-clear": { "description": "清除自定义背景，恢复内置主题图。", "input": "requestIdOnly", "output": "appearanceClearOutput" },
+    "appearance.reset": { "description": "恢复默认外观并清除自定义背景。", "input": "requestIdOnly", "output": "appearanceResetOutput" },
+    "mail.account.add": { "description": "添加账号并即时测试连接；secret 立即加密入 vault。", "input": "addAccountInput", "output": "account" },
+    "mail.account.remove": { "description": "移除账号并清除 vault 条目、缓存与标记。", "input": "accountIdInput", "output": "removeAccountOutput" },
+    "mail.account.test": { "description": "测试账号连接，刷新连接状态。", "input": "accountIdInput", "output": "connectionState" },
+    "mail.list": { "description": "统一收件箱分页：默认只读本地缓存；refresh=true 时先同步 IMAP，滚动超过本地缓存才拉取更早邮件。", "input": "mailListInput", "output": "mailPage" },
+    "mail.get": { "description": "取单封详情；正文已服务端清洗，待客户端复检与 sandbox iframe。", "input": "mailGetInput", "output": "mailMessage" },
+    "mail.image-domains": { "description": "列出该封邮件的远程图片域名供确认。", "input": "mailGetInput", "output": "imageDomainsOutput" },
+    "mail.images": { "description": "按本封邮件的实际域名白名单逐张加载远程图片。", "input": "imagesInput", "output": "mailMessage" },
+    "mail.attachment": { "description": "下载附件（base64）；危险类型与超限始终拒绝。", "input": "mailAttachmentInput", "output": "mailAttachmentOutput" },
+    "mail.reply": { "description": "通过账号对应的 SMTP 服务器直接回复邮件；收件人与 In-Reply-To 取自原邮件。", "input": "mailReplyInput", "output": "mailReplyOutput" },
+    "mail.mark-read": { "description": "已读/未读标记；默认只写本机，开启服务器回写后同步 IMAP \\Seen。", "input": "markReadInput", "output": "markReadOutput" },
+    "mail.mark-all-read": { "description": "把已缓存邮件全部标为已读；开启服务器回写后同步 IMAP \\Seen。", "input": "markAllReadInput", "output": "markAllReadOutput" },
+    "mail.bilingual": { "description": "整封正文翻译；源语言自动识别，仅超长文本按自然边界分批，支持批次重试与续译。", "input": "bilingualInput", "output": "bilingualBody" },
+    "rss.bootstrap": { "description": "阅读模块首屏：分组、订阅源、设置、统计与最近日报。", "input": "requestIdOnly", "output": "rssBootstrap" },
+    "rss.folder.add": { "description": "新建阅读分组。", "input": "rssFolderInput", "output": "rssFolderOutput" },
+    "rss.folder.remove": { "description": "删除分组并把其中的订阅源移到未分组。", "input": "rssIdInput", "output": "rssRemovedOutput" },
+    "rss.folder.reorder": { "description": "保存分组排序。", "input": "rssReorderInput", "output": "rssOkOutput" },
+    "rss.feed.add": { "description": "添加 RSS/Atom/JSON Feed 订阅并立即抓取首屏文章。", "input": "rssFeedAddInput", "output": "rssFeedOutput" },
+    "rss.feed.move": { "description": "把订阅源移动到指定分组；省略 folderId 时移到未分组。", "input": "rssFeedMoveInput", "output": "rssOkOutput" },
+    "rss.feed.reorder": { "description": "保存订阅源排序。", "input": "rssReorderInput", "output": "rssOkOutput" },
+    "rss.feed.remove": { "description": "删除订阅源及其本地文章。", "input": "rssIdInput", "output": "rssRemovedOutput" },
+    "rss.feed.refresh": { "description": "立即刷新指定订阅源或全部启用的订阅源。", "input": "rssRefreshInput", "output": "rssRefreshOutput" },
+    "rss.entries.list": { "description": "分页读取本地文章，支持分组、来源、未读/收藏与关键词筛选。", "input": "rssEntriesInput", "output": "rssEntryPage" },
+    "rss.entries.mark-all-read": { "description": "把当前筛选范围内的文章标为已读。", "input": "rssMarkAllReadInput", "output": "rssOkOutput" },
+    "rss.entry.get": { "description": "读取文章详情；按需提取全文并标记已读。", "input": "rssIdInput", "output": "rssEntry" },
+    "rss.entry.mark-read": { "description": "设置文章已读状态。", "input": "rssEntryActionInput", "output": "rssOkOutput" },
+    "rss.entry.star": { "description": "设置文章收藏状态。", "input": "rssEntryActionInput", "output": "rssOkOutput" },
+    "rss.entry.summarize": { "description": "调用真实 AI 服务生成文章摘要并写入缓存。", "input": "rssSummaryInput", "output": "rssSummaryOutput" },
+    "rss.digest.get": { "description": "读取最近一次阅读简报。", "input": "requestIdOnly", "output": "rssDigestOutput" },
+    "rss.digest.generate": { "description": "按日或周生成阅读简报。", "input": "rssDigestInput", "output": "rssDigestOutput" },
+    "rss.settings.get": { "description": "读取阅读模块设置。", "input": "requestIdOnly", "output": "rssSettingsOutput" },
+    "rss.settings.save": { "description": "保存阅读模块设置。", "input": "rssSettingsInput", "output": "rssSettingsOutput" },
+    "rss.opml.import": { "description": "导入 OPML 订阅列表，逐源真实抓取。", "input": "rssOpmlInput", "output": "rssImportOutput" },
+    "rss.opml.export": { "description": "导出当前订阅为 OPML。", "input": "requestIdOnly", "output": "rssOpmlOutput" }
+  },
+  "tools": {},
+  "commands": {},
+  "actions": {},
+  "events": {
+    "account.state": { "description": "账号连接状态变化（connecting/connected/auth_failed/offline），eventId 供去重。", "model": "accountStateEvent", "audience": "plugin" },
+    "mail.arrived": { "description": "某账号发现从未记录过的新邮件；首次同步与 UIDVALIDITY 重建不发通知。", "model": "mailArrivedEvent", "audience": "plugin" },
+    "mail.read": { "description": "单封邮件已读状态写入本地缓存，供多个界面同步。", "model": "mailReadEvent", "audience": "plugin" },
+    "translate.progress": { "description": "整封邮件翻译批次进度，含刚完成的批次。", "model": "translateProgressEvent", "audience": "plugin" },
+    "rss.updated": { "description": "后台 RSS 抓取发现新文章时推送新增数量。", "model": "rssUpdatedEvent", "audience": "plugin" }
+  },
+  "storage": {
+    "accounts": { "description": "账号元数据（不含 secret；授权码在 vault.bin 加密）。", "model": "accountList", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "mail-cache": { "description": "所有已拉取邮件的摘要缓存，≤20000 条且单值 ≤1.9MB；列表、搜索与未读统计的唯一数据源。", "model": "mailSummaryList", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "mail-sync": { "description": "按账号的同步状态映射 accountId→mailSyncState：首次同步、上次成功时间与更早邮件游标。", "model": "mailSyncMap", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "mail-known": { "description": "已见邮件索引 accountId:messageId→首次记录时间戳；通知只统计不在此索引中的邮件。", "model": "knownMap", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "mail-body": { "description": "已打开邮件正文缓存，键为 mail-body:<accountId>:<messageId>；≤100 封/8MB，单条 ≤1.9MB，超大附件二进制不落盘。", "model": "storedBody", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "mail-body-index": { "description": "正文缓存索引 mail-body:<accountId>:<messageId>→{at,bytes}，按写入时间淘汰。", "model": "bodyIndexMap", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "read": { "description": "本地已读标记映射 accountId:messageId→布尔。", "model": "readMap", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "translated": { "description": "列表已译标记映射 accountId:messageId→布尔。", "model": "translatedMap", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "bilingual": { "description": "整封正文翻译结果缓存 accountId:messageId:target→bilingualBody，≤20 条/2MB。", "model": "bilingualMap", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "images": { "description": "已确认加载的远程图片缓存（URL→dataURL）。", "model": "imageMap", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "appearance": { "description": "插件外观设置；默认跟随 Studio，可覆盖字体、几何、强调色与背景效果。", "model": "appearanceSettings", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "appearance-bg-meta": { "description": "自定义背景文件元数据；图片正文保存在 paths.dataDir/appearance。", "model": "appearanceBackgroundMeta", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "appearance-bg": { "description": "旧版自定义背景 data URL，仅用于一次性迁移。", "model": "storedDataUrl", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "appearance-bg-name": { "description": "旧版自定义背景原文件名，仅用于迁移。", "model": "appearanceBackgroundName", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "appearance-updated": { "description": "最近一次外观修改时间戳。", "model": "storedTimestamp", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "preferences": { "description": "用户偏好：Provider、划词开关、模型名、OpenAI 兼容配置、术语表、日志级别。", "model": "preferencesModel", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "history": { "description": "翻译历史，≤50 条。", "model": "translationJobList", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "translate-cache": { "description": "翻译结果缓存，≤100 条/512KB，命中时跳过供应商请求。", "model": "translationCacheMap", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "settings": { "description": "v0.3.0 旧版设置键（只读迁移源；secret 已迁 vault）。", "model": "legacySettings", "version": 1, "scope": "legacy/{userId}/{profile}" }
+  },
+  "checkpoints": {}
+}

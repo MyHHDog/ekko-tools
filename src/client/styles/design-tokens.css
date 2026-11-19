@@ -1,0 +1,106 @@
+/* ekko-tools design tokens v2 —— 对齐 ekko-sidebar-design 月夜白花主题。
+ * 插件运行在独立 iframe：颜色、圆角与材质全部内置，避免宿主亮色主题覆盖设计稿。
+ * 背景图由 main.tsx 通过构建期 data URL 注入 --ek-bg-image。
+ */
+:root {
+  color-scheme: dark;
+  /* 圆角 */
+  --ek-radius-global: 23px;
+  --ek-radius-chrome: 15px;
+  --ek-radius-card: 21px;
+  --ek-radius-input: 20px;
+  --ek-radius-sidebar: 0px;
+  --ek-radius-content: 0px;
+  --ek-radius-sm: 16px;
+  --ek-radius-pill: 999px;
+  /* 尺寸 */
+  --ek-control-h: 41px;
+  --ek-control-h-sm: 36px;
+  --ek-border-w: 2.5px;
+  --ek-hairline: 1px;
+  --ek-iconbar-w: 64px;
+  --ek-panel-w: 320px;
+  --ek-panel-min: 280px;
+  --ek-panel-max: 360px;
+  --ek-icon: 20px;
+  --ek-row-mail-h: 72px;
+  /* 间距 */
+  --ek-sp-1: calc(4px * var(--ek-spacing-scale, 1.1));
+  --ek-sp-2: calc(8px * var(--ek-spacing-scale, 1.1));
+  --ek-sp-3: calc(12px * var(--ek-spacing-scale, 1.1));
+  --ek-sp-4: calc(16px * var(--ek-spacing-scale, 1.1));
+  --ek-sp-5: calc(20px * var(--ek-spacing-scale, 1.1));
+  --ek-sp-6: calc(28px * var(--ek-spacing-scale, 1.1));
+  /* 阴影与字体 */
+  --ek-shadow-color: rgba(4, 15, 32, 0.50);
+  --ek-shadow: 0 14px 38px var(--ek-shadow-color);
+  --ek-shadow-comic: 0 4px 0 rgba(4, 15, 32, 0.28);
+  --ek-shadow-float: 0 22px 64px rgba(3, 12, 27, 0.38);
+  /* 字体与字号直接读取 Studio 注入的 --font-family / --font-size-base，保证与当前主题一致。 */
+  --ek-font-ui: var(--font-family, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif);
+  --ek-font-read: var(--font-family, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", sans-serif);
+  --ek-font-mono: "JetBrains Mono", "Fira Code", Consolas, monospace;
+  --ek-fs-base: var(--font-size-base, 14px);
+  --ek-fs-xs: calc(var(--ek-fs-base) * 0.786);
+  --ek-fs-sm: calc(var(--ek-fs-base) * 0.893);
+  --ek-fs-md: calc(var(--ek-fs-base) * 1.143);
+  --ek-fs-lg: calc(var(--ek-fs-base) * 1.429);
+  --ek-fs-xl: calc(var(--ek-fs-base) * 1.786);
+  --ek-lh: 1.6;
+  --ek-lh-read: 1.9;
+  --ek-ls: -0.6px;
+  --ek-ls-sm: -0.4px;
+  --ek-ls-read: -0.1px;
+  --ek-fw-regular: 400;
+  --ek-fw-bold: 600;
+  --ek-dur: 140ms;
+  --ek-ease: cubic-bezier(.2, .7, .3, 1);
+  /* 深蓝玻璃材质 */
+  --ek-bg-solid: #16294a;
+  --ek-bg-panel: rgba(18, 36, 64, 0.40);
+  --ek-bg-panel-2: rgba(18, 36, 64, 0.24);
+  --ek-bg-surface: rgba(24, 45, 76, 0.48);
+  --ek-bg-surface-2: rgba(19, 38, 65, 0.36);
+  --ek-bg-input: rgba(13, 30, 53, 0.44);
+  --ek-bg-hover: rgba(211, 227, 252, 0.10);
+  --ek-bg-selected: rgba(132, 168, 226, 0.22);
+  --ek-bg-image: linear-gradient(155deg, var(--ek-bg-panel), var(--ek-bg-panel-2));
+  --ek-border: rgba(195, 213, 245, 0.20);
+  --ek-border-light: rgba(195, 213, 245, 0.10);
+  --ek-glow: rgba(152, 185, 245, 0.22);
+  --ek-scrim: rgba(7, 19, 36, 0.30);
+  --ek-scrim-deep: rgba(6, 17, 33, 0.58);
+  --ek-header-veil: rgba(18, 36, 64, 0.16);
+  --ek-glass-highlight: rgba(236, 244, 255, 0.09);
+  --ek-glass-border: rgba(195, 213, 245, 0.24);
+  --ek-panel-ridge: rgba(236, 244, 255, 0.06);
+  /* 文本与强调 */
+  --ek-text: #ecf1fa;
+  --ek-text-2: #aabbd3;
+  --ek-text-muted: #8ea4c2;
+  --ek-link: #c3d8fa;
+  --ek-accent: #4266a7;
+  --ek-accent-hover: #5077b9;
+  --ek-accent-soft: rgba(151, 185, 236, 0.18);
+  --ek-on-accent: #f7faff;
+  --ek-focus: #98b9f5;
+  --ek-info: #98b9f5;
+  --ek-success: #a9c8bd;
+  --ek-error: #d8aaa4;
+  --ek-warning: #d9c49c;
+  --ek-success-bg: rgba(154, 191, 180, 0.12);
+  --ek-error-bg: rgba(173, 142, 132, 0.14);
+  --ek-warning-bg: rgba(216, 195, 154, 0.12);
+  --ek-skeleton: rgba(169, 195, 231, 0.16);
+  --ek-selection: rgba(118, 159, 211, 0.42);
+  /* 邮件来源色 */
+  --ek-src-163: #c4b6e8;
+  --ek-src-163-bg: rgba(173, 158, 211, 0.15);
+  --ek-src-qq: #a9cdea;
+  --ek-src-qq-bg: rgba(121, 181, 221, 0.15);
+  --ek-src-gmail: #d9c3c8;
+  --ek-src-gmail-bg: rgba(179, 130, 139, 0.15);
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { --ek-dur: 0ms; }
+}

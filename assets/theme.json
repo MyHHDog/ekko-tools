@@ -1,0 +1,53 @@
+{
+  "format": "ekko-studio-theme",
+  "version": 1,
+  "name": "Theme",
+  "settings": {
+    "brightness": "system",
+    "style": "comic",
+    "fontSize": 14,
+    "textColor": null,
+    "accentColor": null,
+    "appearance": {
+      "global": {
+        "opacity": 0.24,
+        "radius": 23,
+        "shadow": 1.2,
+        "letterSpacing": -0.6,
+        "chatWidth": 1280,
+        "overlayOpacity": 0,
+        "gradientAngle": 155,
+        "borderWidth": 2.5,
+        "spacing": 1.1,
+        "blur": 0,
+        "controlHeight": 41
+      },
+      "regions": {
+        "chrome": {
+          "radius": 15,
+          "opacity": 0
+        },
+        "content": {
+          "radius": 0
+        },
+        "sidebar": {
+          "radius": 0,
+          "opacity": 0
+        },
+        "card": {
+          "radius": 21
+        },
+        "input": {
+          "radius": 20
+        },
+        "overlay": {
+          "opacity": 0.8
+        }
+      }
+    }
+  },
+  "background": {
+    "file": "background.jpg",
+    "name": "【哲风壁纸】围墙白花-夜空-晨曦.png"
+  }
+}
