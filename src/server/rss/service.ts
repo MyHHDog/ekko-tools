@@ -13,6 +13,7 @@ import type { Host, Run } from '../adapter/host';
 import type { Vault } from '../vault/store';
 import { RssAi } from './ai';
 import { fetchText, type FetchedPage } from './fetch';
+import { closeProxyAgents, normalizeProxyUrl } from './proxy';
 import { parseSubscription } from './parse';
 import { articleText, firstImage, sanitizeArticle } from './sanitize';
 import { RssStore } from './store';
@@ -20,6 +21,8 @@ type Fetch = (url: string, options?: any) => Promise<FetchedPage>;
 const MAX_ARCHIVE_PAGES = 20;
 const MIN_ENTRY_LIMIT = 50;
 const MAX_ENTRY_LIMIT = 2000;
+const REFRESH_CONCURRENCY = 3;
+const FULL_TEXT_WAIT_MS = 1200;
 function stampDay(value = Date.now()) { const date = new Date(value); date.setHours(0, 0, 0, 0); return date.getTime(); }
 function safeJson<T>(value: string | undefined, fallback: T): T {
   try { return value ? JSON.parse(value) as T : fallback; } catch { return fallback; }
@@ -27,8 +30,9 @@ function safeJson<T>(value: string | undefined, fallback: T): T {
 export class RssService {
   private db?: RssStore;
   private ai: RssAi;
+  private extracting = new Map<string, Promise<boolean>>();
   constructor(private host: Host, private vault: Vault, private directory: string,
-    private fetcher: Fetch = fetchText, private timeoutMs = 20000) {
+    private fetcher: Fetch = fetchText, private timeoutMs = 20000, private fullTextWaitMs = FULL_TEXT_WAIT_MS) {
     this.ai = new RssAi(host, vault, timeoutMs);
     host.lifecycle.add(() => this.close());
   }
@@ -36,7 +40,7 @@ export class RssService {
     if (!this.db) this.db = new RssStore(join(this.directory, 'rss.db'));
     return this.db;
   }
-  close() { this.db?.close(); this.db = undefined; }
+  close() { this.db?.close(); this.db = undefined; void closeProxyAgents(); }
   private settings(): RssSettings {
     const row = this.store().get<{ value: string }>("SELECT value FROM settings WHERE key='config'");
     const saved = safeJson<Partial<RssSettings>>(row?.value, {});
@@ -51,6 +55,10 @@ export class RssService {
       const number = Number(value); return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.round(number))) : fallback;
     };
     const lineHeight = Number(input.articleLineHeight);
+    const proxyMode = input.proxyMode === 'custom' || input.proxyMode === 'none' || input.proxyMode === 'system'
+      ? input.proxyMode : current.proxyMode;
+    let proxyUrl = typeof input.proxyUrl === 'string' ? input.proxyUrl.trim().slice(0, 2048) : current.proxyUrl;
+    if (proxyMode === 'custom') proxyUrl = normalizeProxyUrl(proxyUrl);
     const next: RssSettings = {
       summaryProvider: input.summaryProvider === 'openai' ? 'openai' : input.summaryProvider === 'hostModel' ? 'hostModel' : current.summaryProvider,
       summaryModel: typeof input.summaryModel === 'string' ? input.summaryModel.slice(0, 200) : current.summaryModel,
@@ -67,6 +75,7 @@ export class RssService {
       articleLineHeight: Number.isFinite(lineHeight) ? Math.round(Math.min(2.4, Math.max(1.4, lineHeight)) * 100) / 100 : current.articleLineHeight,
       articleWidth: clamp(input.articleWidth, 520, 1024, current.articleWidth),
       articleCustomCss: typeof input.articleCustomCss === 'string' ? input.articleCustomCss.slice(0, 12000) : current.articleCustomCss,
+      proxyMode, proxyUrl,
     };
     this.store().run("INSERT INTO settings(key,value) VALUES('config',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [JSON.stringify(next)]);
     return next;
@@ -171,8 +180,12 @@ export class RssService {
     this.store().run('DELETE FROM summaries WHERE entry_id NOT IN (SELECT id FROM entries)');
     return added;
   }
+  private fetchPage(url: string, options: any = {}) {
+    const settings = this.settings();
+    return this.fetcher(url, { ...options, proxy: { mode: settings.proxyMode, url: settings.proxyUrl } });
+  }
   private async loadSubscription(url: string, options: any, archive: boolean) {
-    const page = await this.fetcher(url, options);
+    const page = await this.fetchPage(url, options);
     if (page.status === 304) return { page };
     const head = parseSubscription(page.body, url);
     if (!archive || !head.nextUrl) return { page, parsed: head };
@@ -183,7 +196,7 @@ export class RssService {
     for (let pages = 1; next && entries.length < max && pages < MAX_ARCHIVE_PAGES; pages++) {
       if (visited.has(next)) break;
       visited.add(next);
-      const olderPage = await this.fetcher(next, { timeoutMs: this.timeoutMs });
+      const olderPage = await this.fetchPage(next, { timeoutMs: this.timeoutMs });
       if (olderPage.status === 304) break;
       const older = parseSubscription(olderPage.body, next);
       for (const item of older.entries) {
@@ -280,14 +293,23 @@ export class RssService {
         ? this.store().all<any>(`SELECT * FROM feeds WHERE enabled=1
           AND (next_fetch_at IS NULL OR next_fetch_at<=?) ORDER BY last_fetched_at ASC`, [Date.now()])
         : this.store().all<any>('SELECT * FROM feeds WHERE enabled=1 ORDER BY last_fetched_at ASC');
-    let checked = 0, newEntries = 0, failed = 0;
-    for (const row of rows) {
-      checked++;
-      try { newEntries += await this.refreshOne(row); }
-      catch { failed++; }
+    const results: number[] = [];
+    let next = 0;
+    const workers = Array.from({ length: Math.min(REFRESH_CONCURRENCY, rows.length) }, async () => {
+      while (next < rows.length) {
+        const index = next++;
+        try { results[index] = await this.refreshOne(rows[index]); }
+        catch { results[index] = -1; }
+      }
+    });
+    await Promise.all(workers);
+    let newEntries = 0, failed = 0;
+    for (const value of results) {
+      if (value < 0) failed++;
+      else newEntries += value;
     }
     this.cleanup();
-    return { checked, newEntries, failed };
+    return { checked: rows.length, newEntries, failed };
   }
   async poll() {
     const settings = this.settings();
@@ -328,48 +350,72 @@ export class RssService {
     const offset = Math.max(0, Number(input.cursor) || 0);
     const from = 'FROM entries e JOIN feeds f ON f.id=e.feed_id';
     const base = `${from} WHERE ${clause}`;
-    const total = this.store().get<{ n: number }>(`SELECT COUNT(*) n ${base}`, params)?.n || 0;
-    const unread = this.store().get<{ n: number }>(`SELECT COUNT(*) n ${base} AND e.read=0`, params)?.n || 0;
-    const rows = this.store().all<any>(`SELECT e.*,f.title feed_title,f.icon feed_icon,s.payload summary_payload
-      ${from} LEFT JOIN summaries s ON s.entry_id=e.id WHERE ${clause} ORDER BY e.published_at DESC,e.id DESC LIMIT ? OFFSET ?`,
+    const counts = this.store().get<{ n: number; unread: number }>(
+      `SELECT COUNT(*) n, COALESCE(SUM(CASE WHEN e.read=0 THEN 1 ELSE 0 END),0) unread ${base}`, params);
+    const total = counts?.n || 0, unread = counts?.unread || 0;
+    const rows = this.store().all<any>(`SELECT e.id,e.feed_id,e.title,e.url,e.author,e.published_at,e.snippet,
+      e.read,e.starred,e.image,f.title feed_title,f.icon feed_icon,
+      EXISTS(SELECT 1 FROM summaries s WHERE s.entry_id=e.id) has_summary
+      ${from} WHERE ${clause} ORDER BY e.published_at DESC,e.id DESC LIMIT ? OFFSET ?`,
     [...params, limit, offset]);
-    const items: RssEntryItem[] = rows.map(row => {
-      const value = this.mapEntry(row);
-      return {
-        id: value.id, feedId: value.feedId, feedTitle: value.feedTitle,
-        ...(value.feedIcon ? { feedIcon: value.feedIcon } : {}),
-        title: value.title, url: value.url, ...(value.author ? { author: value.author } : {}),
-        publishedAt: value.publishedAt, snippet: value.snippet, read: value.read, starred: value.starred,
-        hasSummary: value.hasSummary, ...(value.image ? { image: value.image } : {}),
-      };
-    });
+    const items: RssEntryItem[] = rows.map(row => ({
+      id: row.id, feedId: row.feed_id, feedTitle: row.feed_title,
+      ...(row.feed_icon ? { feedIcon: row.feed_icon } : {}),
+      title: row.title, url: row.url, ...(row.author ? { author: row.author } : {}),
+      publishedAt: row.published_at, snippet: row.snippet, read: row.read === 1, starred: row.starred === 1,
+      hasSummary: row.has_summary === 1, ...(row.image ? { image: row.image } : {}),
+    }));
     return { items, ...(offset + items.length < total ? { nextCursor: offset + items.length } : {}), total, unread };
   }
   private async extractFullText(row: any) {
-    if (row.content_fetched_at || !/^https?:/i.test(row.url || '')) return;
+    if (row.content_fetched_at || !/^https?:/i.test(row.url || '')) return false;
     try {
-      const page = await this.fetcher(row.url, { timeoutMs: this.timeoutMs, limit: 6 * 1024 * 1024 });
+      const page = await this.fetchPage(row.url, { timeoutMs: this.timeoutMs, limit: 6 * 1024 * 1024 });
       const document = parseHTML(page.body).document;
       const article = new Readability(document as unknown as Document, { charThreshold: 180 }).parse();
-      if (!article?.content) return;
+      if (!article?.content) return false;
       const html = sanitizeArticle(article.content);
       const contentText = articleText(html);
-      if (contentText.length < 180) return;
+      if (contentText.length < 180) return false;
       this.store().run(`UPDATE entries SET content_html=?,content_text=?,snippet=?,image=COALESCE(image,?),content_fetched_at=?
         WHERE id=?`, [html, contentText, contentText.slice(0, 180), firstImage(html) || null, Date.now(), row.id]);
-    } catch { /* 正文提取失败时保留订阅源正文 */ }
+      return true;
+    } catch { return false; /* 正文提取失败时保留订阅源正文 */ }
   }
-  async getEntry(id: string): Promise<RssEntry> {
+  private extractOnce(row: any): Promise<boolean> {
+    const id = String(row.id);
+    const running = this.extracting.get(id);
+    if (running) return running;
+    const task = this.extractFullText(row).finally(() => this.extracting.delete(id));
+    this.extracting.set(id, task);
+    return task;
+  }
+  private async extractWithinBudget(row: any) {
+    if (row.content_fetched_at || !/^https?:/i.test(row.url || '')) return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<boolean>(resolve => {
+      timer = setTimeout(() => resolve(false), this.fullTextWaitMs);
+    });
+    try {
+      return await Promise.race([this.extractOnce(row), timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  async getEntry(id: string, waitForFullText = false): Promise<RssEntry> {
     let row = this.store().get<any>(`SELECT e.*,f.title feed_title,f.icon feed_icon,s.payload summary_payload
       FROM entries e JOIN feeds f ON f.id=e.feed_id LEFT JOIN summaries s ON s.entry_id=e.id WHERE e.id=?`, [String(id)]);
     assert(row, 'NOT_FOUND');
+    this.store().run('UPDATE entries SET read=1 WHERE id=?', [String(id)]);
+    row.read = 1;
+    let updated = false;
     if (this.settings().fullText) {
-      await this.extractFullText(row);
+      updated = waitForFullText ? await this.extractOnce(row) : await this.extractWithinBudget(row);
+    }
+    if (updated) {
       row = this.store().get<any>(`SELECT e.*,f.title feed_title,f.icon feed_icon,s.payload summary_payload
         FROM entries e JOIN feeds f ON f.id=e.feed_id LEFT JOIN summaries s ON s.entry_id=e.id WHERE e.id=?`, [String(id)]);
     }
-    this.store().run('UPDATE entries SET read=1 WHERE id=?', [String(id)]);
-    row.read = 1;
     return this.mapEntry(row);
   }
   markRead(id: string, read: boolean) {
@@ -415,7 +461,7 @@ export class RssService {
   async summarize(id: string, run: Run, lang?: 'zh' | 'en') {
     const settings = this.settings();
     if (!await this.ai.configured(settings, run)) throw new AppError('VALIDATION', false, 'configuration');
-    const entry = await this.getEntry(id);
+    const entry = await this.getEntry(id, true);
     const summary = await this.ai.summary(entry, lang ? { ...settings, summaryLang: lang } : settings, run);
     this.store().run('INSERT INTO summaries(entry_id,payload,created_at) VALUES(?,?,?) ON CONFLICT(entry_id) DO UPDATE SET payload=excluded.payload,created_at=excluded.created_at',
       [entry.id, JSON.stringify(summary), summary.createdAt]);

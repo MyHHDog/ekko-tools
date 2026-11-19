@@ -1,6 +1,7 @@
 import type { ClientHost } from './adapter/host';
 import type { ErrorInfo } from '../shared/types';
 import { t } from './i18n';
+import { uuid } from './uuid';
 export class RpcError extends Error {
   constructor(public info:ErrorInfo){super(info.message);}
 }
@@ -10,7 +11,7 @@ export function cancelPending(ctx:ClientHost,owner:string) {
   pending.get(ctx)?.delete(owner);
 }
 export async function call<T=any>(ctx:ClientHost,name:string,input?:any):Promise<T> {
-  const owner=input?.__owner||'general',id=crypto.randomUUID();
+  const owner=input?.__owner||'general',id=uuid();
   const payload=JSON.parse(JSON.stringify({...input,__requestId:id}));
   if(!pending.has(ctx))pending.set(ctx,new Map());const owners=pending.get(ctx)!;
   if(!owners.has(owner))owners.set(owner,new Set());owners.get(owner)!.add(id);

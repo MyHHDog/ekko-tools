@@ -2,6 +2,7 @@ export type RssSummaryProvider = 'hostModel' | 'openai';
 export type RssSummaryLang = 'zh' | 'en';
 export type RssArticleTheme = 'paper' | 'sepia' | 'dark';
 export type RssArticleFont = 'serif' | 'sans' | 'mono';
+export type RssProxyMode = 'system' | 'custom' | 'none';
 export interface RssFolder { id: string; name: string; createdAt: number; unread?: number }
 export interface RssFeed {
   id: string; url: string; title: string; siteUrl: string; description: string;
@@ -36,6 +37,7 @@ export interface RssSettings {
   articleTheme: RssArticleTheme; articleFont: RssArticleFont;
   articleFontSize: number; articleLineHeight: number; articleWidth: number;
   articleCustomCss: string;
+  proxyMode: RssProxyMode; proxyUrl: string;
 }
 export interface RssCounts { feeds: number; unread: number; today: number; starred: number }
 export interface RssBootstrap {
@@ -48,5 +50,5 @@ export const defaultRssSettings: RssSettings = {
   maxEntriesPerFeed: 2000, fullText: true, remoteImages: true,
   articleTheme: 'paper', articleFont: 'serif',
   articleFontSize: 16, articleLineHeight: 1.85, articleWidth: 720,
-  articleCustomCss: '',
+  articleCustomCss: '', proxyMode: 'system', proxyUrl: '',
 };

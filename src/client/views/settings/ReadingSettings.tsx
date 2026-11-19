@@ -25,6 +25,18 @@ const articleFonts = [
   { id: 'mono', label: '等宽' },
 ] as const;
 
+function validProxy(mode: RssSettings['proxyMode'], value: string) {
+  if (mode !== 'custom') return true;
+  const input = value.trim();
+  if (!input) return false;
+  try {
+    const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(input) ? input : `http://${input}`);
+    return /^https?:$/.test(url.protocol) && !!url.hostname && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
 export function ReadingSettings({ ctx }: { ctx: ClientHost }) {
   const [draft, setDraft] = useState<RssSettings>(defaultRssSettings);
   const [busy, setBusy] = useState(false), [loading, setLoading] = useState(true);
@@ -62,6 +74,10 @@ export function ReadingSettings({ ctx }: { ctx: ClientHost }) {
   async function save() {
     setBusy(true); setError(undefined); setSaved(false);
     try {
+      if (!validProxy(draft.proxyMode, draft.proxyUrl)) {
+        setError({ message: t('请填写有效的代理地址。') });
+        return;
+      }
       if (draft.summaryProvider === 'openai') {
         await call(ctx, 'settings.save', {
           openaiBaseUrl: openaiBaseUrl.trim(), openaiApiKey: openaiApiKey.trim(),
@@ -133,6 +149,25 @@ export function ReadingSettings({ ctx }: { ctx: ClientHost }) {
         <input type="checkbox" checked={draft.remoteImages} onChange={event => change({ remoteImages: event.target.checked })}/><span className="notify-switch" aria-hidden="true"/></label>
       <label className="notify-row"><span><strong>{t('自动生成摘要')}</strong><small>{t('打开文章时自动生成 AI 摘要。')}</small></span>
         <input type="checkbox" checked={draft.autoSummary} onChange={event => change({ autoSummary: event.target.checked })}/><span className="notify-switch" aria-hidden="true"/></label>
+      <div className="reading-style-block">
+        <div className="reading-style-head">
+          <div><strong>{t('网络代理')}</strong><small>{t('订阅抓取使用的网络代理。')}</small></div>
+        </div>
+        <div className="reading-settings-grid">
+          <label>{t('代理方式')}
+            <select value={draft.proxyMode} onChange={event => change({ proxyMode: event.target.value as RssSettings['proxyMode'] })}>
+              <option value="system">{t('跟随系统代理')}</option>
+              <option value="custom">{t('自定义代理')}</option>
+              <option value="none">{t('不使用代理')}</option>
+            </select>
+          </label>
+          {draft.proxyMode === 'custom' && <label className="span-2">{t('代理地址')}
+            <input value={draft.proxyUrl} maxLength={2048} placeholder={t('例如 http://127.0.0.1:7890')}
+              onChange={event => change({ proxyUrl: event.target.value })} autoComplete="off"/>
+          </label>}
+        </div>
+        <p className="small reading-style-hint">{t('支持 HTTP/HTTPS 代理；系统代理会读取环境变量或操作系统设置。')}</p>
+      </div>
       <div className="reading-style-block">
         <div className="reading-style-head">
           <div><strong>{t('正文样式')}</strong><small>{t('只影响阅读文章正文，可覆盖字体、字号、版心、配色与细节。')}</small></div>

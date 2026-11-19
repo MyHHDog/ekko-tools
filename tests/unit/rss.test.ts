@@ -30,10 +30,10 @@ function page(url: string, body: string, status = 200): FetchedPage {
   return { url, status, body, contentType: 'application/rss+xml' };
 }
 
-function service(directory: string, fetcher: (url: string, options?: any) => Promise<FetchedPage>) {
+function service(directory: string, fetcher: (url: string, options?: any) => Promise<FetchedPage>, fullTextWaitMs?: number) {
   const host = { lifecycle: { add: () => () => {} }, config: {} } as any;
   const vault = { get: async () => { throw new AppError('NOT_FOUND'); } } as any;
-  return new RssService(host, vault, join(directory, 'rss'), fetcher, 5000);
+  return new RssService(host, vault, join(directory, 'rss'), fetcher, 5000, fullTextWaitMs);
 }
 
 function run(models?: any) {
@@ -175,6 +175,45 @@ describe('RSS 本地库', () => {
     const result = await rss.refresh();
     expect(result).toMatchObject({ checked: 1, newEntries: 0, failed: 1 });
     expect(rss.bootstrap().feeds[0].lastError).toMatch(/连不上|网络|重试/);
+    rss.close();
+  });
+
+  it('多源刷新有界并发且单源失败不影响其他源', async () => {
+    const directory = await tempdir(); directories.push(directory);
+    const urls = Array.from({ length: 4 }, (_, index) => `https://example.com/feed-${index}.xml`);
+    const bodies = Object.fromEntries(urls.map((url, index) =>
+      [url, rssFeed(`订阅 ${index}`, [{ id: `e${index}`, title: `文章 ${index}`, url: `https://example.com/${index}` }])]));
+    let active = 0, maxActive = 0, failUrl = '';
+    const rss = service(directory, async url => {
+      active++; maxActive = Math.max(maxActive, active);
+      await new Promise(resolve => setTimeout(resolve, 30));
+      active--;
+      if (url === failUrl) throw new AppError('NETWORK_UNREACHABLE', true, 'network');
+      return page(url, bodies[url]);
+    });
+    for (const url of urls) await rss.addFeed({ url });
+    maxActive = 0; failUrl = urls[3];
+    const result = await rss.refresh();
+    expect(result).toMatchObject({ checked: 4, failed: 1 });
+    expect(maxActive).toBeGreaterThan(1);
+    expect(maxActive).toBeLessThanOrEqual(3);
+    rss.close();
+  });
+
+  it('正文提取较慢时先返回订阅源内容，不阻塞文章打开', async () => {
+    const directory = await tempdir(); directories.push(directory);
+    const slow = 'https://example.com/slow';
+    const body = rssFeed('订阅', [{ id: 'slow-1', title: '慢文章', url: slow }]);
+    const rss = service(directory, async url => {
+      if (url === slow) return new Promise<FetchedPage>(() => {});
+      return page(url, body);
+    }, 30);
+    await rss.addFeed({ url: 'https://example.com/feed.xml' });
+    const started = Date.now();
+    const entry = await rss.getEntry(rss.listEntries({}).items[0].id);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(entry.read).toBe(true);
+    expect(entry.contentHtml).toContain('正文');
     rss.close();
   });
 
@@ -322,6 +361,7 @@ describe('RSS AI 摘要', () => {
     const entry = await rss.getEntry(rss.listEntries({}).items[0].id);
     const summary = await rss.summarize(entry.id, run(models));
     expect(summary.summary).toMatchObject({ tldr: '一句话摘要', tags: ['AI', '测试'] });
+    expect(rss.listEntries({}).items[0].hasSummary).toBe(true);
     expect(() => validateModel(contract, 'rssSummaryOutput', summary)).not.toThrow();
     expect(rss.bootstrap().digest).toBeUndefined();
     const digest = await rss.generateDigest(run(models), 'day');
@@ -388,6 +428,20 @@ describe('RSS AI 摘要', () => {
     };
     await expect(rss.summarize(rss.listEntries({}).items[0].id, run(models)))
       .rejects.toMatchObject({ code: 'PROVIDER_BAD_RESPONSE' });
+    rss.close();
+  });
+  it('抓取时把阅读代理设置传给抓取器', async () => {
+    const directory = await tempdir(); directories.push(directory);
+    const body = rssFeed('订阅', [{ id: '1', title: '文章', url: 'https://example.com/1' }]);
+    let received: any;
+    const rss = service(directory, async (url, options) => {
+      received = options;
+      return page(url, body);
+    });
+    expect(rss.saveSettings({ proxyMode: 'custom', proxyUrl: '127.0.0.1:7890' }).proxyUrl)
+      .toBe('http://127.0.0.1:7890');
+    await rss.addFeed({ url: 'https://example.com/feed.xml' });
+    expect(received.proxy).toEqual({ mode: 'custom', url: 'http://127.0.0.1:7890' });
     rss.close();
   });
 });

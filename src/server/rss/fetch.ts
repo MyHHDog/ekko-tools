@@ -1,7 +1,11 @@
 import { lookup } from 'node:dns/promises';
+import { fetch as undiciFetch } from 'undici';
 import { AppError } from '../../shared/error-codes';
+import type { RssProxyMode } from '../../shared/rss';
+import { proxyAgent, resolveRssProxy } from './proxy';
 export interface FetchOptions {
   timeoutMs?: number; limit?: number; etag?: string; lastModified?: string; allowPrivate?: boolean;
+  proxy?: { mode: RssProxyMode; url: string };
 }
 export interface FetchedPage {
   url: string; status: number; body: string; contentType: string;
@@ -58,9 +62,13 @@ export async function fetchText(raw: string, options: FetchOptions = {}): Promis
   let current = raw;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const url = await checkedUrl(current, options.allowPrivate === true);
+    const proxyUrl = await resolveRssProxy(url.toString(), options.proxy?.mode || 'none', options.proxy?.url || '');
     let response: Response;
     try {
-      response = await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
+      response = await undiciFetch(url, {
+        headers, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs),
+        ...(proxyUrl ? { dispatcher: proxyAgent(proxyUrl) } : {}),
+      }) as unknown as Response;
     } catch (error) {
       if (error instanceof AppError) throw error;
       throw new AppError('NETWORK_UNREACHABLE', true, 'network');

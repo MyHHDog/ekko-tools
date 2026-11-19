@@ -7,6 +7,7 @@ import {call,readable,cancelPending} from '../rpc-client';
 import {Source} from '../components/AccountChip';
 import {State,Icon} from '../components/States';
 import {t,tFormat,currentLocale} from '../i18n';
+import {readViewCache,writeViewCache} from '../bootstrap-cache';
 import {MailDetail} from './MailDetail';
 function relative(ts:number){const d=new Date(ts),now=new Date();const pad=(n:number)=>String(n).padStart(2,'0');
   if(d.toDateString()===now.toDateString())return pad(d.getHours())+':'+pad(d.getMinutes());
@@ -15,15 +16,21 @@ function relative(ts:number){const d=new Date(ts),now=new Date();const pad=(n:nu
   if(now.getTime()-ts<604800000)return currentLocale()==='en'?d.toLocaleDateString('en-US',{weekday:'short'}):t('周')+['日','一','二','三','四','五','六'][d.getDay()];
   return tFormat('{m}/{d}',{m:d.getMonth()+1,d:d.getDate()});}
 const srcClass:Record<string,string>={'163':'s163',qq:'sqq',gmail:'sgm',custom:'scustom'};
-export function Mail({ctx,accounts,target,onTarget,onSettings,compact=false,refreshAccounts,onUnread}:{ctx:ClientHost;accounts:Account[];target:string;onTarget?:(s:string)=>void;onSettings:()=>void;compact?:boolean;refreshAccounts:()=>Promise<void>;onUnread?:(n:number)=>void}){
+export function Mail({ctx,accounts,target,onTarget,onSettings,compact=false,refreshAccounts,onUnread,hidden=false}:{ctx:ClientHost;accounts:Account[];target:string;onTarget?:(s:string)=>void;onSettings:()=>void;compact?:boolean;refreshAccounts:()=>Promise<void>;onUnread?:(n:number)=>void;hidden?:boolean}){
   const [filter,setFilter]=useState(''),[search,setSearch]=useState(''),[status,setStatus]=useState('全部');
-  const [page,setPage]=useState<MailPage>({items:[],updated:0,total:0}),[busy,setBusy]=useState(false),[moreBusy,setMoreBusy]=useState(false),[marking,setMarking]=useState(false),[error,setError]=useState<any>();
+  const accountKey=accounts.map(a=>a.id).join(',');
+  const [initialPage]=useState<MailPage|undefined>(()=>{
+    const cached=readViewCache<{accountKey:string;filter:string;page:MailPage}>(ctx,'mail');
+    return cached?.accountKey===accountKey&&cached.filter===filter?cached.page:undefined;
+  });
+  const [page,setPage]=useState<MailPage>(initialPage??{items:[],updated:0,total:0}),[busy,setBusy]=useState(!initialPage),[moreBusy,setMoreBusy]=useState(false),[marking,setMarking]=useState(false),[error,setError]=useState<any>();
   const [selected,setSelected]=useState<MailSummary>(),[index,setIndex]=useState(-1),[translated,setTranslated]=useState<Set<string>>(new Set());
   const list=useRef<HTMLDivElement>(null),sentinel=useRef<HTMLDivElement>(null),alive=useRef(true),generation=useRef(0);
   const inFlight=useRef(false),queued=useRef(false),loadMoreRef=useRef<()=>void>(()=>{});
-  const accountKey=accounts.map(a=>a.id).join(',');
+  const hiddenRef=useRef(hidden);hiddenRef.current=hidden;
   const unreadTotal=Object.values(page.unreadByAccount||{}).reduce((sum,value)=>sum+value,0);
   useEffect(()=>{onUnread?.(unreadTotal);},[unreadTotal,onUnread]);
+  useEffect(()=>{if(page.items.length||page.total>0)writeViewCache(ctx,'mail',{accountKey,filter,page});},[ctx,accountKey,filter,page]);
   async function sync(more=false,silent=false,remote=false){
     if(inFlight.current){if(!more)queued.current=true;return;}
     inFlight.current=true;
@@ -42,7 +49,7 @@ export function Mail({ctx,accounts,target,onTarget,onSettings,compact=false,refr
       if(queued.current&&alive.current){queued.current=false;void sync();}}
   }
   loadMoreRef.current=()=>{if(!compact&&page.nextCursor&&!inFlight.current)void sync(true,true);};
-  useEffect(()=>{alive.current=true;void sync();const timer=window.setInterval(()=>{if(!inFlight.current&&document.visibilityState==='visible')void sync(false,true);},60000);
+  useEffect(()=>{alive.current=true;void sync();const timer=window.setInterval(()=>{if(!inFlight.current&&!hiddenRef.current&&document.visibilityState==='visible')void sync(false,true);},60000);
     return()=>{alive.current=false;generation.current++;inFlight.current=false;window.clearInterval(timer);cancelPending(ctx,'inbox');};},[filter,accountKey]);
   useEffect(()=>{
     if(compact||!page.nextCursor)return;
@@ -54,6 +61,7 @@ export function Mail({ctx,accounts,target,onTarget,onSettings,compact=false,refr
   useEffect(()=>ctx.messages.on('mail.arrived',event=>{
     const value=event.data||event;
     if(filter&&value.accountId&&value.accountId!==filter)return;
+    if(hiddenRef.current)return;
     if(!inFlight.current)void sync();
   }),[ctx,filter]);
   useEffect(()=>ctx.messages.on('mail.read',event=>{

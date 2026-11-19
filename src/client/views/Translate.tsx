@@ -7,6 +7,7 @@ import type {TranslationJob} from '../../shared/types';
 import {State,Icon} from '../components/States';
 import {t,tFormat} from '../i18n';
 import {pickTranslationTarget} from '../../host/selection-overlay';
+import {uuid} from '../uuid';
 const languageLabels:Record<string,string>={auto:'自动检测',zh:'简体中文',en:'English',ja:'日本語',ko:'한국어',fr:'Français',de:'Deutsch',es:'Español',ru:'Русский'};
 const providerLabels:Record<string,string>={baidu:'百度翻译',deepl:'DeepL 翻译',hostModel:'宿主模型',openai:'OpenAI 兼容'};
 export function Language({value,onChange,auto=false,autoTarget=false,label}:{value:string;onChange:(s:string)=>void;auto?:boolean;autoTarget?:boolean;label:string}){
@@ -47,7 +48,7 @@ export function Translate({ctx,fragment='',target='zh',onTarget,onSettings,selec
     try{
       const resolvedTo=to==='auto'?pickTranslationTarget(input,'zh'):to;
       const same=!!job&&job.request.text===input&&job.request.from===from&&job.request.to===resolvedTo;
-      const value=retry&&same?await call<TranslationJob>(ctx,'translate.retry',{jobId:job!.id,provider:provider||undefined,__owner:'translate'}):await call<TranslationJob>(ctx,'translate.run',{text:input,from,to:resolvedTo,provider:provider||undefined,retryNonce:retry?crypto.randomUUID():undefined,__owner:'translate'});
+      const value=retry&&same?await call<TranslationJob>(ctx,'translate.retry',{jobId:job!.id,provider:provider||undefined,__owner:'translate'}):await call<TranslationJob>(ctx,'translate.run',{text:input,from,to:resolvedTo,provider:provider||undefined,retryNonce:retry?uuid():undefined,__owner:'translate'});
       if(active.current&&id===runId.current)setJob(value);
     }catch(e){if(active.current&&id===runId.current)setError(readable(e));}
     finally{if(active.current&&id===runId.current)setBusy(false);}

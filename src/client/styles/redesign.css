@@ -24,6 +24,8 @@ body{color:var(--ek-text)}
 .tabs [aria-selected=true]:hover{background:var(--ek-accent-soft)}
 .seg-badge{min-width:17px;height:17px;padding:0 4px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;background:var(--ek-bg-selected);color:var(--ek-text);font-size:10px;letter-spacing:0}
 .panel-content{padding:0 16px 8px;gap:14px}
+.view-slot{display:contents}
+.view-slot[hidden]{display:none}
 .panel-error{padding:0 16px 10px}
 .panel-footer{height:var(--ek-control-h-sm);padding:0 var(--ek-sp-3);border-top:var(--ek-hairline) solid var(--ek-border-light);background:color-mix(in srgb,var(--ek-bg-input) 58%,transparent);display:flex;align-items:center;justify-content:space-between;color:var(--ek-text-2);font-size:var(--ek-fs-xs);letter-spacing:var(--ek-ls-sm);flex-shrink:0}
 .keycap{font-size:var(--ek-fs-xs);padding:2px 6px;border:var(--ek-hairline) solid var(--ek-border);border-radius:8px;color:var(--ek-text-2);letter-spacing:0}

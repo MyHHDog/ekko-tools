@@ -10,22 +10,28 @@ import {Settings} from './views/Settings';
 import {State} from './components/States';
 import {SelectionPopover} from './components/SelectionPopover';
 import {installStudioSelection} from './studio-selection';
+import {readBootstrapCache,writeBootstrapCache} from './bootstrap-cache';
 import {t,tFormat} from './i18n';
 import {defaultNotifications,inQuietHours,normalizeNotifications} from '../shared/notifications';
-export function App({ctx}:{ctx:ClientHost}){
+export function App({ctx,initialData,refreshOnMount=false}:{ctx:ClientHost;initialData?:Bootstrap;refreshOnMount?:boolean}){
   const slot=resolveSlot(ctx),requested=String(ctx.view||ctx.location.query.view||'');
   const initialTab=requested==='mail'||slot==='mail'?'收件箱':requested==='reading'||slot==='reading'?'阅读':'翻译';
   const [tab,setTab]=useState(initialTab);
+  const [mounted,setMounted]=useState<Set<string>>(()=>new Set([initialTab]));
+  const showTab=(next:string)=>{setMounted(old=>old.has(next)?old:new Set(old).add(next));setTab(next);};
   const activeTabRef=useRef(tab);
   activeTabRef.current=tab;
-  const [data,setData]=useState<Bootstrap>(),[error,setError]=useState<any>(),[fragment,setFragment]=useState(''),[target,setTarget]=useState('zh'),[selection,setSelection]=useState(true),[selectionReady,setSelectionReady]=useState(false),[unread,setUnread]=useState(0);
+  const [data,setData]=useState<Bootstrap|undefined>(()=>initialData??readBootstrapCache(ctx)),[error,setError]=useState<any>(),[fragment,setFragment]=useState(''),[target,setTarget]=useState('zh'),[selection,setSelection]=useState(true),[selectionReady,setSelectionReady]=useState(false),[unread,setUnread]=useState(0);
+  const bootstrapped=useRef(initialData);
   const [node,setNode]=useState<HTMLElement|null>(null),active=useRef(true),seen=useRef(new Set<string>()),polling=useRef(false);
   const notifySettings=useRef(defaultNotifications);
-  async function refresh(){const value=await call<Bootstrap>(ctx,'app.bootstrap');if(active.current){setData(value);setError(undefined);}}
+  async function refresh(){const value=await call<Bootstrap>(ctx,'app.bootstrap');if(active.current){setData(value);setError(undefined);writeBootstrapCache(ctx,value);}}
   useEffect(()=>{
     active.current=true;
     void (async()=>{
-      try{await refresh();}catch(e){if(active.current)setError(readable(e));}
+      try{
+        if(bootstrapped.current&&!refreshOnMount)writeBootstrapCache(ctx,bootstrapped.current);else await refresh();
+      }catch(e){if(active.current)setError(readable(e));}
       try{
         const settings=await call(ctx,'settings.get');if(!active.current)return;
         setSelection(settings.selection!==false);notifySettings.current=normalizeNotifications(settings.notifications);setSelectionReady(true);
@@ -48,7 +54,7 @@ export function App({ctx}:{ctx:ClientHost}){
   },[]);
   useEffect(()=>{
     const next=String(ctx.view||ctx.location.query.view||'');
-    if(next==='mail'||slot==='mail')setTab('收件箱');else if(next==='reading'||slot==='reading')setTab('阅读');else if(next==='translate')setTab('翻译');
+    if(next==='mail'||slot==='mail')showTab('收件箱');else if(next==='reading'||slot==='reading')showTab('阅读');else if(next==='translate')showTab('翻译');
   },[ctx.view,ctx.location.query.view,slot]);
   useEffect(()=>{
     if(!selectionReady)return;
@@ -68,15 +74,21 @@ export function App({ctx}:{ctx:ClientHost}){
   if(!data)return <main className="ek-panel workspace" aria-busy="true">{error?<div className="panel-error"><State kind="syncError" detail={error.message} action={<button onClick={()=>refresh().catch(e=>setError(readable(e)))}>重试</button>}/></div>:<BootShell/>}</main>;
   if(slot==='settings')return <Settings ctx={ctx} data={data} refresh={refresh} onSelection={setSelection}/>;
   return <main className={`ek-panel workspace view-${tab==='收件箱'?'mail':tab==='阅读'?'reading':'translate'}`} ref={setNode} onKeyDown={e=>{
-    if(e.altKey&&e.key==='1'){e.preventDefault();setTab('翻译');}if(e.altKey&&e.key==='2'){e.preventDefault();setTab('收件箱');}if(e.altKey&&e.key==='3'){e.preventDefault();setTab('阅读');}
+    if(e.altKey&&e.key==='1'){e.preventDefault();showTab('翻译');}if(e.altKey&&e.key==='2'){e.preventDefault();showTab('收件箱');}if(e.altKey&&e.key==='3'){e.preventDefault();showTab('阅读');}
   }}>
     {error&&<div className="panel-error"><State kind="syncError" detail={error.message} action={<button className="compact" onClick={()=>setError(undefined)}>{t('关闭提示')}</button>}/></div>}
     <div className="panel-content">
-      {tab==='翻译'?<Translate ctx={ctx} fragment={fragment} target={target} onTarget={setTarget} onSettings={()=>ctx.ui.navigate(settingsPath+'?section=translate')} selection={selection} onSelection={setSelection} providers={data.providers}/>:
-        tab==='阅读'?<Reading ctx={ctx}/>:
-          <Mail ctx={ctx} accounts={data.accounts} target={target} onTarget={setTarget} onSettings={()=>ctx.ui.navigate(settingsPath+'?section=mail')} compact={false} refreshAccounts={refresh} onUnread={setUnread}/>}
+      <div className="view-slot" hidden={tab!=='翻译'}>
+        {mounted.has('翻译')&&<Translate ctx={ctx} fragment={fragment} target={target} onTarget={setTarget} onSettings={()=>ctx.ui.navigate(settingsPath+'?section=translate')} selection={selection} onSelection={setSelection} providers={data.providers}/>}
+      </div>
+      <div className="view-slot" hidden={tab!=='阅读'}>
+        {mounted.has('阅读')&&<Reading ctx={ctx}/>}
+      </div>
+      <div className="view-slot" hidden={tab!=='收件箱'}>
+        {mounted.has('收件箱')&&<Mail ctx={ctx} accounts={data.accounts} target={target} onTarget={setTarget} onSettings={()=>ctx.ui.navigate(settingsPath+'?section=mail')} compact={false} refreshAccounts={refresh} onUnread={setUnread} hidden={tab!=='收件箱'}/>}
+      </div>
     </div>
-    <SelectionPopover ctx={ctx} root={node} enabled={selection} target={target} onSend={text=>{setFragment(text);setTab('翻译');}}/>
+    <SelectionPopover ctx={ctx} root={node} enabled={selection} target={target} onSend={text=>{setFragment(text);showTab('翻译');}}/>
   </main>;
 }
 function BootShell(){

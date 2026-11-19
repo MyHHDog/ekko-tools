@@ -10,8 +10,9 @@ import themeStudio from './styles/theme-studio.css';
 import reading from './styles/reading.css';
 import fonts from './styles/fonts.css';
 import panelBackground from '../../assets/panel-bg.jpg';
-import {applyStudioTheme,watchStudioTheme} from './theme';
-import {currentAppearance,loadAppearance} from './appearance';
+import {watchStudioTheme} from './theme';
+import {applyAppearance,currentAppearance,currentBackground,loadAppearance} from './appearance';
+import {readAppearanceCache,readBootstrapCache,writeAppearanceCache} from './bootstrap-cache';
 export {resolveSlot} from './adapter/host';
 const bootBackground='#16294a';
 function paintBootSurface(element?:HTMLElement){
@@ -26,15 +27,16 @@ export function mount(element:HTMLElement,ctx:ClientHost){
   paintBootSurface(element);
   document.documentElement.style.setProperty('--ek-theme-bg-image',`url("${panelBackground}")`);
   const sheet=document.createElement('style');sheet.textContent=fonts+'\n'+tokens+'\n'+styles+'\n'+compat+'\n'+redesign+'\n'+mailClient+'\n'+themeStudio+'\n'+reading;document.head.append(sheet);
-  applyStudioTheme();
-  let disposed=false,appearanceTimer=0,appearanceIdle=0;
-  const loadLater=()=>{if(!disposed)void loadAppearance(ctx).catch(()=>{});};
-  const idle=(window as any).requestIdleCallback;
-  if(typeof idle==='function')appearanceIdle=idle(loadLater,{timeout:800});
-  else appearanceTimer=window.setTimeout(loadLater,120);
+  const cachedBoot=readBootstrapCache(ctx),cachedAppearance=readAppearanceCache(ctx);
+  applyAppearance(cachedAppearance??currentAppearance(),cachedAppearance?undefined:currentBackground()||undefined);
+  let disposed=false,appearanceTimer=0;
   const unwatch=watchStudioTheme(()=>currentAppearance().followStudio);
-  const root=createRoot(element);root.render(<App ctx={ctx}/>);
-  const dispose=()=>{if(disposed)return;disposed=true;window.clearTimeout(appearanceTimer);if(appearanceIdle)(window as any).cancelIdleCallback?.(appearanceIdle);unwatch();root.unmount();sheet.remove();};
+  const root=createRoot(element);root.render(<App ctx={ctx} initialData={cachedBoot} refreshOnMount={!!cachedBoot}/>);
+  if(ctx.slot!=='workspace-sidebar')appearanceTimer=window.setTimeout(()=>{
+    if(disposed)return;
+    void loadAppearance(ctx).then(value=>writeAppearanceCache(ctx,value.settings)).catch(()=>{});
+  },0);
+  const dispose=()=>{if(disposed)return;disposed=true;window.clearTimeout(appearanceTimer);unwatch();root.unmount();sheet.remove();};
   const release=ctx.lifecycle.add(dispose);
   ctx.signal.addEventListener('abort',release,{once:true});
   return()=>{ctx.signal.removeEventListener('abort',release);release();};

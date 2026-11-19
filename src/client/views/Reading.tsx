@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { ClientHost } from '../adapter/host';
@@ -8,9 +8,11 @@ import type {
 import { call, cancelPending, readable } from '../rpc-client';
 import { Icon, State } from '../components/States';
 import { t, tFormat } from '../i18n';
+import { readViewCache, writeViewCache } from '../bootstrap-cache';
 import { frameDocument } from '../sanitize/html-allowlist';
 import type { ArticleStyle } from '../sanitize/html-allowlist';
 import { ReadingDiscover } from './ReadingDiscover';
+type ReadingCache = { data?: RssBootstrap; page?: RssEntryPage; filter?: string };
 function relative(ts: number) {
   const date = new Date(ts), now = new Date();
   const pad = (value: number) => String(value).padStart(2, '0');
@@ -62,7 +64,10 @@ function ArticleFrame({ html, remoteImages, articleStyle, onPrevious, onNext }: 
     bind();
     return () => { frame.removeEventListener('load', bind); detach(); };
   }, []);
-  const srcDoc = frameDocument(html, remoteImages, 'article', articleStyle);
+  const srcDoc = useMemo(
+    () => frameDocument(html, remoteImages, 'article', articleStyle),
+    [html, remoteImages, articleStyle],
+  );
   return <div className="article-frame"><iframe ref={frameRef} title="文章正文" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
     referrerPolicy="no-referrer" srcDoc={srcDoc}/></div>;
 }
@@ -74,13 +79,15 @@ function FeedAvatar({ feed }: { feed?: { title?: string; icon?: string } }) {
   </span>;
 }
 export function Reading({ ctx }: { ctx: ClientHost }) {
-  const [data, setData] = useState<RssBootstrap>();
-  const [page, setPage] = useState<RssEntryPage>({ items: [], total: 0, unread: 0 });
+  const [cached] = useState<ReadingCache | undefined>(() => readViewCache<ReadingCache>(ctx, 'reading'));
+  const cachedPage = cached?.filter === 'unread|||' ? cached.page : undefined;
+  const [data, setData] = useState<RssBootstrap | undefined>(cached?.data);
+  const [page, setPage] = useState<RssEntryPage>(cachedPage ?? { items: [], total: 0, unread: 0 });
   const [view, setView] = useState<'all' | 'unread' | 'starred'>('unread');
   const [folderId, setFolderId] = useState('');
   const [feedId, setFeedId] = useState('');
   const [query, setQuery] = useState('');
-  const [busy, setBusy] = useState(false), [moreBusy, setMoreBusy] = useState(false);
+  const [busy, setBusy] = useState(false), [initializing, setInitializing] = useState(!cachedPage), [moreBusy, setMoreBusy] = useState(false);
   const [markAllBusy, setMarkAllBusy] = useState(false);
   const [error, setError] = useState<any>();
   const [selectedId, setSelectedId] = useState(''), [entry, setEntry] = useState<RssEntry>();
@@ -105,7 +112,9 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
   const sortDrag = useRef<{ kind: 'feed' | 'folder'; scope: string; id: string; x: number; y: number; active: boolean } | undefined>(undefined);
   const sortOver = useRef(''), sortClickGuard = useRef(false);
   const assistantRef = useRef<HTMLElement>(null), assistantLayerRef = useRef<HTMLDivElement>(null);
-  const assistantDrag = useRef<{ id: number; x: number; y: number; ox: number; oy: number } | undefined>(undefined);
+  const assistantDrag = useRef<{
+    id: number; x: number; y: number; ox: number; oy: number; last?: { x: number; y: number };
+  } | undefined>(undefined);
   const opmlRef = useRef<HTMLInputElement>(null);
   const loadMoreRef = useRef<() => void>(() => {});
   const settings = data?.settings;
@@ -116,6 +125,7 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
     const value = await rssCall<RssBootstrap>('rss.bootstrap');
     if (!alive.current) return;
     setData(value); setError(undefined);
+    writeViewCache(ctx, 'reading', { ...readViewCache<ReadingCache>(ctx, 'reading'), data: value });
   }
   async function load(reset = false, more = false) {
     if (inFlight.current) return;
@@ -128,13 +138,15 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
         query: query.trim() || undefined, cursor: more ? page.nextCursor : undefined, limit: 30,
       });
       if (alive.current && version === generation.current) {
-        setPage(old => ({ ...value, items: more ? [...old.items, ...value.items] : value.items }));
+        const nextPage = { ...value, items: more ? [...page.items, ...value.items] : value.items };
+        setPage(nextPage);
+        writeViewCache(ctx, 'reading', { ...readViewCache<ReadingCache>(ctx, 'reading'), filter: [view, folderId, feedId, query.trim()].join('|'), page: nextPage });
         return value;
       }
     } catch (reason) { if (alive.current && version === generation.current) setError(readable(reason)); }
     finally {
       inFlight.current = false;
-      if (alive.current) { setBusy(false); setMoreBusy(false); }
+      if (alive.current) { setBusy(false); setMoreBusy(false); setInitializing(false); }
     }
   }
   loadMoreRef.current = () => { if (page.nextCursor && !inFlight.current) void load(false, true); };
@@ -379,15 +391,19 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
     if (!drag || drag.id !== event.pointerId || !panel || !layer) return;
     const maxLeft = Math.max(0, layer.clientWidth - panel.offsetWidth - 32);
     const maxDown = Math.max(0, layer.clientHeight - panel.offsetHeight - 32);
-    setAssistantOffset({
+    const next = {
       x: Math.min(0, Math.max(-maxLeft, drag.ox + event.clientX - drag.x)),
       y: Math.min(maxDown + 16, Math.max(-16, drag.oy + event.clientY - drag.y)),
-    });
+    };
+    drag.last = next;
+    panel.style.transform = `translate(${next.x}px, ${next.y}px)`;
   }
   function endAssistantDrag(event: ReactPointerEvent<HTMLElement>) {
-    if (assistantDrag.current?.id !== event.pointerId) return;
+    const drag = assistantDrag.current;
+    if (drag?.id !== event.pointerId) return;
     assistantDrag.current = undefined;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (drag.last) setAssistantOffset(drag.last);
   }
   async function refresh() {
     setBusy(true); setError(undefined);
@@ -579,11 +595,11 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
     setShowDigest(false); setFocus(false); setAssistantOpen(false); setSummaryError(undefined);
   }
   const readerMode = !!selectedId && !showDigest;
-  const articleStyle: Partial<ArticleStyle> = {
+  const articleStyle = useMemo<Partial<ArticleStyle>>(() => ({
     theme: settings?.articleTheme, font: settings?.articleFont,
     fontSize: settings?.articleFontSize, lineHeight: settings?.articleLineHeight,
     width: settings?.articleWidth, customCss: settings?.articleCustomCss,
-  };
+  }), [settings]);
   const menuFeed = menu?.feedId ? feeds.find(feed => feed.id === menu.feedId) : undefined;
   const menuFolder = menu?.folderId ? folders.find(folder => folder.id === menu.folderId) : undefined;
   const ungroupedFeeds = feeds.filter(feed => !feed.folderId);
@@ -686,8 +702,8 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
       {error && <div className="state bad" role="alert"><Icon name="alert"/><div><strong>{t('操作未完成')}</strong><p>{error.message}</p>
         <button className="compact" onClick={() => setError(undefined)}>{t('关闭提示')}</button></div></div>}
       <div className="reading-list" ref={listRef} aria-busy={busy || moreBusy} onScroll={scheduleAutoRead}>
-        {busy && !page.items.length && <div className="reading-loading" role="status"><span className="spin"/><span>{t('正在加载…')}</span></div>}
-        {!busy && !page.items.length && <div className="reading-empty">
+        {(busy || initializing) && !page.items.length && <div className="reading-loading" role="status"><span className="spin"/><span>{t('正在加载…')}</span></div>}
+        {!busy && !initializing && !page.items.length && <div className="reading-empty">
           <span className="ring"><Icon name={feeds.length ? 'search' : 'rss'}/></span>
           <h3>{feeds.length ? t('没有符合条件的文章') : t('还没有订阅')}</h3>
           {feeds.length
