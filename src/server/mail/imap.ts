@@ -18,7 +18,7 @@ export class ImapConnector implements Connector {
     let entry:Entry|undefined;const abort=()=>this.pool.close(poolId);
     const options={host:endpoint.host,port:endpoint.port,secure:endpoint.secure,doSTARTTLS:endpoint.secure?undefined:true,tls:{rejectUnauthorized:true,minVersion:'TLSv1.2'},
       auth:{user:acc.account.username||address,pass:acc.secret,loginMethod:'LOGIN'},logger:false,logRaw:false,emitLogs:false,disableAutoIdle:true,
-      disableAutoEnable:true,disableCompression:true,disableBinary:true,clientInfo:{name:'ekko-tools',version:'0.1.0'},
+      disableAutoEnable:true,disableCompression:true,disableBinary:true,clientInfo:{name:'ekko-tools',version:'0.1.1'},
       connectionTimeout:this.timeoutMs,greetingTimeout:this.timeoutMs,socketTimeout:this.timeoutMs} as ConstructorParameters<typeof ImapFlow>[0];
     signal.addEventListener('abort',abort,{once:true});
     try {

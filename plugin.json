@@ -1,9 +1,23 @@
 {
   "id": "ekko-tools",
   "name": "Ekko Tools",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "apiVersion": 1,
   "description": "可扩展工具插件：翻译、统一收发件箱（163/QQ/Gmail/自建 IMAP/SMTP）与 RSS 阅读",
+  "author": {
+    "name": "MyHHDog",
+    "url": "https://github.com/MyHHDog"
+  },
+  "repository": "https://github.com/MyHHDog/ekko-tools",
+  "homepage": "https://github.com/MyHHDog/ekko-tools",
+  "issues": "https://github.com/MyHHDog/ekko-tools/issues",
+  "changelog": "https://github.com/MyHHDog/ekko-tools/blob/main/CHANGELOG.md",
+  "keywords": [
+    "translation",
+    "email",
+    "rss",
+    "toolbox"
+  ],
   "license": "MIT",
   "icon": "assets/icon.png",
   "server": "dist/server.mjs",
@@ -49,7 +63,7 @@
       {
         "viewId": "translate",
         "title": "Ekko Tools",
-        "icon": "book",
+        "icon": "assets/icon.png",
         "order": -100
       },
       {

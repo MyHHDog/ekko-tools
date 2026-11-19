@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Ekko Tools">
+  <defs>
+    <linearGradient id="bg" x1="120" y1="64" x2="920" y2="960" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1D4A7A"/>
+      <stop offset="0.55" stop-color="#12335A"/>
+      <stop offset="1" stop-color="#081A31"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="260" y1="280" x2="764" y2="744" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#D7E7FF"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="680" y1="464" x2="764" y2="560" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7DD3FF"/>
+      <stop offset="1" stop-color="#4C8DFF"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(300 220) rotate(45) scale(580)">
+      <stop stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#bg)"/>
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#glow)"/>
+  <rect x="38" y="38" width="948" height="948" rx="214" fill="none" stroke="#A8C8F4" stroke-opacity="0.22" stroke-width="6"/>
+  <rect x="240" y="280" width="72" height="464" rx="36" fill="url(#mark)"/>
+  <rect x="240" y="280" width="520" height="96" rx="48" fill="url(#mark)"/>
+  <rect x="240" y="464" width="380" height="96" rx="48" fill="url(#mark)"/>
+  <rect x="240" y="648" width="520" height="96" rx="48" fill="url(#mark)"/>
+  <rect x="684" y="464" width="80" height="96" rx="40" fill="url(#accent)"/>
+</svg>

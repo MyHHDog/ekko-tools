@@ -1,7 +1,7 @@
 {
-  "date": "2026-11-19T05:39:33.061Z",
+  "date": "2026-11-19T07:45:15.627Z",
   "scope": "runtime dist/contracts/assets/manifest/package metadata/docs；测试夹具不进入发布包",
-  "files": 15,
+  "files": 16,
   "forbiddenFindings": [],
   "dataArtifacts": [],
   "knownFixtureLiterals": [],
