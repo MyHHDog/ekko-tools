@@ -1,0 +1,270 @@
+/* Studio 表面层级：chrome / sidebar / content / card 与宿主主题一致。 */
+.ek-panel.workspace,
+.ek-panel.workspace .panel-content,
+.ek-panel.workspace.settings-page,
+.mail-client,
+.reading-view,
+.mail-list-pane,
+.mail-reader-pane,
+.reading-detail-pane,
+.reading-article{background:var(--ek-bg-content)}
+.ek-panel.workspace .panel-header,
+.ek-panel.workspace .panel-footer{
+  background:var(--ek-bg-shell);border-color:var(--ek-border-light);
+}
+.mail-folders,
+.reading-sources,
+.settings-nav{background:var(--ek-bg-panel)}
+.reading-list-pane,
+.settings-section .card,
+.translate-view .card,
+.langbar,
+.translate-options,
+.settings-account{background:var(--ek-bg-surface)}
+.settings-body{background:transparent}
+.selection-popover,
+.selection-popover::after,
+.reading-assistant,
+.reading-discover-panel,
+.reading-menu{background:var(--ek-bg-raised)}
+.mail-client,
+.reading-view,
+.settings-section .card,
+.translate-view .card,
+.mail-reader-pane,
+.reading-detail-pane,
+.reading-article{box-shadow:none}
+.selection-popover,
+.reading-assistant,
+.reading-discover-panel,
+.reading-menu{box-shadow:var(--ek-shadow-float)}
+
+/* 有壁纸：原图由 .ek-panel.workspace::before 铺底，蓝色只来自壁纸本身。
+   各区域独立 backdrop-filter，复刻 Studio 的 chrome / sidebar / content 层级。 */
+:root[data-ek-custom-background] .ek-panel.workspace{
+  background:transparent;
+}
+:root[data-ek-custom-background] .ek-panel.workspace .panel-header,
+:root[data-ek-custom-background] .ek-panel.workspace .panel-footer{
+  background:var(--ek-glass-chrome-bg);
+  -webkit-backdrop-filter:var(--ek-glass-chrome-filter);
+  backdrop-filter:var(--ek-glass-chrome-filter);
+}
+/* 设置页的玻璃属于整块内容区，内部导航和卡片再叠自己的表面。 */
+:root[data-ek-custom-background] .ek-panel.workspace.settings-page .settings-layout{
+  width:100%;
+  max-width:none;
+  padding-inline:max(32px,calc((100% - 1016px) / 2));
+  background:var(--ek-glass-content-bg);
+  -webkit-backdrop-filter:var(--ek-glass-content-filter);
+  backdrop-filter:var(--ek-glass-content-filter);
+}
+:root[data-ek-custom-background] .ek-panel.workspace .panel-content{
+  background:var(--ek-glass-content-bg);
+  -webkit-backdrop-filter:var(--ek-glass-content-filter);
+  backdrop-filter:var(--ek-glass-content-filter);
+}
+:root[data-ek-custom-background] .ek-panel.workspace .settings-body{
+  background:transparent;
+  -webkit-backdrop-filter:none;
+  backdrop-filter:none;
+}
+:root[data-ek-custom-background] .ek-panel.workspace .settings-nav{
+  background:var(--ek-glass-sidebar-bg);
+  -webkit-backdrop-filter:var(--ek-glass-sidebar-filter);
+  backdrop-filter:var(--ek-glass-sidebar-filter);
+}
+/* 三栏视图让每个窗格自己取样壁纸，父级必须保持透明且不带滤镜。 */
+:root[data-ek-custom-background] .ek-panel.workspace.view-mail .panel-content,
+:root[data-ek-custom-background] .ek-panel.workspace.view-reading .panel-content,
+:root[data-ek-custom-background] .mail-client,
+:root[data-ek-custom-background] .reading-view{
+  background:transparent;
+  -webkit-backdrop-filter:none;
+  backdrop-filter:none;
+}
+:root[data-ek-custom-background] .mail-folders,
+:root[data-ek-custom-background] .reading-sources{
+  background:var(--ek-glass-sidebar-bg);
+  -webkit-backdrop-filter:var(--ek-glass-sidebar-filter);
+  backdrop-filter:var(--ek-glass-sidebar-filter);
+}
+:root[data-ek-custom-background] .mail-list-pane,
+:root[data-ek-custom-background] .mail-reader-pane,
+:root[data-ek-custom-background] .reading-list-pane,
+:root[data-ek-custom-background] .reading-detail-pane,
+:root[data-ek-custom-background] .reading-article{
+  background:var(--ek-glass-content-bg);
+  -webkit-backdrop-filter:var(--ek-glass-content-filter);
+  backdrop-filter:var(--ek-glass-content-filter);
+}
+/* 浮层单独取样，避免被内容层的 backdrop root 截断。 */
+:root[data-ek-custom-background] .selection-popover,
+:root[data-ek-custom-background] .reading-assistant,
+:root[data-ek-custom-background] .reading-discover-panel,
+:root[data-ek-custom-background] .reading-menu{
+  background:var(--ek-glass-overlay-bg);
+  -webkit-backdrop-filter:var(--ek-glass-overlay-filter);
+  backdrop-filter:var(--ek-glass-overlay-filter);
+}
+:root[data-ek-custom-background] .settings-section .card,
+:root[data-ek-custom-background] .translate-view .card,
+:root[data-ek-custom-background] .article-frame,
+:root[data-ek-custom-background] .langbar,
+:root[data-ek-custom-background] .translate-options,
+:root[data-ek-custom-background] .state:not(:where(.mail-client *)),
+:root[data-ek-custom-background] .settings-account{
+  background:var(--ek-glass-card-bg);
+  -webkit-backdrop-filter:var(--ek-glass-card-filter);
+  backdrop-filter:var(--ek-glass-card-filter);
+}
+:root[data-ek-custom-background] :is(
+  .field,input:not([type=checkbox]):not([type=range]):not([type=color]),
+  select,.ek-select-trigger,textarea,.reading-list-head .field,
+  .reading-discover-tools .field,.reading-add-form input
+):not(:where(.compose-form *,.reply-form textarea,.mail-list-head .field,.mail-list-head .field input,.mail-actions .ek-select-trigger)){
+  background-color:var(--ek-glass-input-bg);
+  -webkit-backdrop-filter:var(--ek-glass-input-filter);
+  backdrop-filter:var(--ek-glass-input-filter);
+}
+@media (max-width:760px){
+  :root[data-ek-custom-background] .reading-view .reading-list-head .field,
+  :root[data-ek-custom-background] .reading-view .reading-list-head .field input{
+    background-color:transparent!important;
+    -webkit-backdrop-filter:none!important;
+    backdrop-filter:none!important;
+  }
+  :root[data-ek-custom-background] .reading-view .reading-list-head .field:focus-within{
+    background-color:var(--ek-bg-hover)!important;
+  }
+}
+:root[data-ek-custom-background] .selection-popover::after{
+  background:var(--ek-glass-overlay-bg);
+}
+
+/* 区域覆盖：每个外观区域独立使用边框、阴影和圆角。 */
+.ek-panel.workspace .panel-header,
+.ek-panel.workspace .panel-footer{
+  border-color:var(--ek-border-chrome);
+  box-shadow:var(--ek-shadow-chrome);
+}
+.mail-folders,
+.reading-sources,
+.settings-nav{
+  border-color:var(--ek-border-sidebar);
+  border-radius:var(--ek-radius-sidebar);
+  box-shadow:var(--ek-shadow-sidebar);
+}
+.mail-client,
+.reading-view,
+.panel-content,
+.mail-list-pane,
+.mail-reader-pane,
+.reading-list-pane,
+.reading-detail-pane,
+.reading-article{
+  border-color:var(--ek-border-content);
+  box-shadow:var(--ek-shadow-content);
+}
+.card,
+.settings-section .card,
+.translate-view .card,
+.state,
+.settings-account{
+  border-color:var(--ek-border-card);
+  box-shadow:var(--ek-shadow-card);
+}
+input,
+select,
+.ek-select-trigger,
+textarea,
+.field,
+.langbar,
+.translate-options{
+  border-color:var(--ek-border-input);
+  box-shadow:var(--ek-shadow-input);
+}
+.selection-popover,
+.reading-assistant,
+.reading-discover-panel,
+.reading-menu{
+  border-color:var(--ek-border-overlay);
+  border-radius:var(--ek-radius-overlay);
+  box-shadow:var(--ek-shadow-overlay);
+}
+@media (max-width:760px){
+  :root[data-ek-custom-background] .ek-panel.workspace.settings-page .settings-layout{
+    width:calc(100% - 16px);
+    max-width:calc(100% - 16px);
+    margin:8px;
+    padding:8px 10px calc(20px + env(safe-area-inset-bottom,0px));
+    border:var(--ek-hairline) solid var(--ek-glass-border);
+    border-radius:16px;
+    overflow-y:auto;
+  }
+  /* 移动端设置只保留内容区这一层玻璃；翻译输出和工具行保持透明，
+     语言栏、服务选择与原文卡片由下方统一规则应用同一输入面。 */
+  :root[data-ek-custom-background] .ek-panel.workspace.settings-page{
+    background:var(--ek-bg-page);
+    -webkit-backdrop-filter:none;
+    backdrop-filter:none;
+  }
+  :root[data-ek-custom-background] .ek-panel.workspace.view-translate .panel-content{
+    width:calc(100% - 16px);
+    max-width:calc(100% - 16px);
+    margin:8px;
+    padding:8px 10px;
+    border:var(--ek-hairline) solid var(--ek-glass-border);
+    border-radius:16px;
+  }
+  :root[data-ek-custom-background] .ek-panel.workspace.settings-page .settings-nav{
+    margin-inline:-10px;
+    padding-inline:10px;
+    border-radius:16px 16px 0 0;
+  }
+  :root[data-ek-custom-background] .ek-panel.workspace.settings-page .settings-nav,
+  :root[data-ek-custom-background] .ek-panel.workspace.settings-page .settings-section .card,
+  :root[data-ek-custom-background] .ek-panel.workspace.settings-page .settings-account,
+  :root[data-ek-custom-background] .ek-panel.workspace.view-translate .langbar,
+  :root[data-ek-custom-background] .ek-panel.workspace.view-translate .translate-options,
+  :root[data-ek-custom-background] .ek-panel.workspace.view-translate .translate-view .card,
+  :root[data-ek-custom-background] .ek-panel.workspace.view-translate .translate-view .tools{
+    background:transparent;
+    -webkit-backdrop-filter:none;
+    backdrop-filter:none;
+  }
+  .ek-panel.workspace::before{
+    background-image:var(--ek-user-bg-image-mobile,var(--ek-user-bg-image,var(--ek-bg-gradient,none)));
+  }
+}
+
+/* 翻译页语言下拉、原文与译文卡片统一跟随上方定义的 surface 表面；
+   内部触发器保持透明，避免移动端上下排列时出现色差。 */
+.ek-panel.workspace.view-translate .translate-view .card:not(.output) .tools{
+  background:transparent;
+}
+.ek-panel.workspace.view-translate .translate-view .langbar .ek-select-trigger,
+.ek-panel.workspace.view-translate .translate-view .translate-options .ek-select-trigger{
+  background-color:transparent;
+}
+:root[data-ek-custom-background] .ek-panel.workspace.view-translate .translate-view .card:not(.output) textarea{
+  background-color:transparent;
+  -webkit-backdrop-filter:none;
+  backdrop-filter:none;
+}
+:root[data-ek-custom-background] .ek-panel.workspace.view-translate .translate-view .langbar .ek-select-trigger,
+:root[data-ek-custom-background] .ek-panel.workspace.view-translate .translate-view .translate-options .ek-select-trigger{
+  background-color:transparent;
+  -webkit-backdrop-filter:none;
+  backdrop-filter:none;
+}
+.ek-panel.workspace :is(
+  input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),
+  select,
+  textarea,
+  .ek-select-trigger
+):not(:where(.compose-form *,.reply-form textarea,.mail-list-head .field input,.mail-actions .ek-select-trigger)):is(:focus,:focus-visible){
+  outline:none;
+  border-color:var(--ek-border-input);
+  box-shadow:var(--ek-shadow-input);
+}

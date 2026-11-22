@@ -4,6 +4,7 @@ import type { RssSettings } from '../../../shared/rss';
 import { defaultRssSettings } from '../../../shared/rss';
 import { call, readable } from '../../rpc-client';
 import { Icon } from '../../components/States';
+import { Select } from '../../components/Select';
 import { t } from '../../i18n';
 
 const aiPresets = [
@@ -96,10 +97,9 @@ export function ReadingSettings({ ctx }: { ctx: ClientHost }) {
     <div className="card settings-form reading-settings" aria-busy={loading}>
       <div className="reading-settings-grid">
         <label>{t('摘要服务')}
-          <select value={draft.summaryProvider} onChange={event => change({ summaryProvider: event.target.value as RssSettings['summaryProvider'] })}>
-            <option value="hostModel">{t('宿主模型')}</option>
-            <option value="openai">{t('OpenAI 兼容')}</option>
-          </select>
+          <Select label={t('摘要服务')} value={draft.summaryProvider}
+            onChange={value => change({ summaryProvider: value as RssSettings['summaryProvider'] })}
+            options={[{value:'hostModel',label:t('宿主模型')},{value:'openai',label:t('OpenAI 兼容')}]}/>
         </label>
         {draft.summaryProvider === 'openai'
           ? <>
@@ -107,14 +107,14 @@ export function ReadingSettings({ ctx }: { ctx: ClientHost }) {
               <input value={openaiBaseUrl} onChange={event => { setPresetId(''); setOpenaiBaseUrl(event.target.value); }} placeholder="https://api.openai.com/v1" autoComplete="off"/>
             </label>
             <label className="span-2">{t('快速填入服务')}
-              <select value={presetId} onChange={event => {
-                setPresetId(event.target.value);
-                const preset = aiPresets.find(item => item.id === event.target.value);
+              <Select label={t('快速填入服务')} value={presetId} onChange={value => {
+                setPresetId(value);
+                const preset = aiPresets.find(item => item.id === value);
                 if (preset) { setOpenaiBaseUrl(preset.baseUrl); change({ summaryModel: preset.model }); }
-              }}>
-                <option value="">{t('选择常用服务')}</option>
-                {aiPresets.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-              </select>
+              }} options={[
+                {value:'',label:t('选择常用服务')},
+                ...aiPresets.map(item => ({value:item.id,label:item.label})),
+              ]}/>
             </label>
             <label>{t('API Key')}
               <input type="password" value={openaiApiKey} placeholder={openaiConfigured ? t('已保存；留空保持原密钥') : t('填写 API Key（本地服务可留空）')}
@@ -128,10 +128,9 @@ export function ReadingSettings({ ctx }: { ctx: ClientHost }) {
             <input value={draft.summaryModel} maxLength={200} placeholder={t('留空使用默认模型')} onChange={event => change({ summaryModel: event.target.value })}/>
           </label>}
         <label>{t('摘要语言')}
-          <select value={draft.summaryLang} onChange={event => change({ summaryLang: event.target.value as RssSettings['summaryLang'] })}>
-            <option value="zh">{t('简体中文')}</option>
-            <option value="en">English</option>
-          </select>
+          <Select label={t('摘要语言')} value={draft.summaryLang}
+            onChange={value => change({ summaryLang: value as RssSettings['summaryLang'] })}
+            options={[{value:'zh',label:t('简体中文')},{value:'en',label:'English'}]}/>
         </label>
         <label>{t('轮询间隔（分钟）')}
           <input type="number" min={5} max={120} value={draft.pollMinutes} onChange={event => change({ pollMinutes: Number(event.target.value) })}/>
@@ -155,11 +154,12 @@ export function ReadingSettings({ ctx }: { ctx: ClientHost }) {
         </div>
         <div className="reading-settings-grid">
           <label>{t('代理方式')}
-            <select value={draft.proxyMode} onChange={event => change({ proxyMode: event.target.value as RssSettings['proxyMode'] })}>
-              <option value="system">{t('跟随系统代理')}</option>
-              <option value="custom">{t('自定义代理')}</option>
-              <option value="none">{t('不使用代理')}</option>
-            </select>
+            <Select label={t('代理方式')} value={draft.proxyMode}
+              onChange={value => change({ proxyMode: value as RssSettings['proxyMode'] })}
+              options={[
+                {value:'system',label:t('跟随系统代理')},{value:'custom',label:t('自定义代理')},
+                {value:'none',label:t('不使用代理')},
+              ]}/>
           </label>
           {draft.proxyMode === 'custom' && <label className="span-2">{t('代理地址')}
             <input value={draft.proxyUrl} maxLength={2048} placeholder={t('例如 http://127.0.0.1:7890')}
@@ -175,14 +175,14 @@ export function ReadingSettings({ ctx }: { ctx: ClientHost }) {
         </div>
         <div className="reading-settings-grid">
           <label>{t('正文主题')}
-            <select value={draft.articleTheme} onChange={event => change({ articleTheme: event.target.value as RssSettings['articleTheme'] })}>
-              {articleThemes.map(item => <option key={item.id} value={item.id}>{t(item.label)}</option>)}
-            </select>
+            <Select label={t('正文主题')} value={draft.articleTheme}
+              onChange={value => change({ articleTheme: value as RssSettings['articleTheme'] })}
+              options={articleThemes.map(item => ({value:item.id,label:t(item.label)}))}/>
           </label>
           <label>{t('正文字体')}
-            <select value={draft.articleFont} onChange={event => change({ articleFont: event.target.value as RssSettings['articleFont'] })}>
-              {articleFonts.map(item => <option key={item.id} value={item.id}>{t(item.label)}</option>)}
-            </select>
+            <Select label={t('正文字体')} value={draft.articleFont}
+              onChange={value => change({ articleFont: value as RssSettings['articleFont'] })}
+              options={articleFonts.map(item => ({value:item.id,label:t(item.label)}))}/>
           </label>
           <label>{t('正文字号')}
             <input type="number" min={12} max={24} value={draft.articleFontSize} onChange={event => change({ articleFontSize: Number(event.target.value) })}/>

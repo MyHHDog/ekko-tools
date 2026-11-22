@@ -56,10 +56,13 @@ export async function sendReply(account: Account, secret: string, message: Reply
     if (signal.aborted) throw new AppError('TIMEOUT');
     const info = await transport.sendMail({
       from: { name: account.alias || alias, address: account.address },
-      to: message.to,
+      to: { name: '', address: message.to },
       subject: message.subject,
       text: message.text,
       html: message.html,
+      attachments: message.attachments,
+      disableFileAccess: true,
+      disableUrlAccess: true,
       inReplyTo: message.inReplyTo,
       references: message.references,
     });

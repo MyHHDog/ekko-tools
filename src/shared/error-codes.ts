@@ -7,6 +7,8 @@ export const messages: Record<ErrorCode,string> = {
   INPUT_TOO_LONG:'超出 5000 字，请删减后翻译', ATTACHMENT_TOO_LARGE:'附件超过大小上限，请在邮箱网页版下载',
   NOT_FOUND:'内容不存在或已失效，请刷新', VAULT_LOCKED:'凭据库无法解锁，请检查口令或文件完整性',
   SEND_FAILED:'邮件发送失败，请检查 SMTP 设置和收发权限',
+  MAIL_TRASH_UNAVAILABLE:'此邮箱未提供可安全使用的垃圾箱，请在邮箱网页版删除',
+  MAIL_DELETE_FAILED:'服务器未确认邮件已移入垃圾箱，请检查邮箱后重试',
   FEED_TOO_LARGE:'订阅内容过大，已停止抓取',
   FEED_INVALID:'订阅内容无法解析，请检查地址或稍后重试',
   VALIDATION:'输入无效，请检查填写内容',
@@ -32,7 +34,7 @@ export function errorInfo(error: unknown): ErrorInfo {
 function categoryOf(code:ErrorCode):NonNullable<ErrorInfo['category']>{
   return code.startsWith('AUTH_')?'authentication':['TIMEOUT','NETWORK_UNREACHABLE'].includes(code)?'network':
     ['VALIDATION','VAULT_LOCKED','UNSUPPORTED_LANGUAGE','INPUT_TOO_LONG','FEED_TOO_LARGE','FEED_INVALID'].includes(code)?'configuration':
-    ['PROVIDER_BAD_RESPONSE','PROVIDER_QUOTA','RATE_LIMITED','SEND_FAILED'].includes(code)?'provider':'internal';
+    ['PROVIDER_BAD_RESPONSE','PROVIDER_QUOTA','RATE_LIMITED','SEND_FAILED','MAIL_TRASH_UNAVAILABLE','MAIL_DELETE_FAILED'].includes(code)?'provider':'internal';
 }
 export function assert(value: unknown, code: ErrorCode = 'VALIDATION'): asserts value {
   if (!value) throw new AppError(code);

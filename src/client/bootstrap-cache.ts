@@ -1,14 +1,21 @@
 import type { Bootstrap } from '../shared/rpc-contract';
 import type { ClientHost } from './adapter/host';
 import type { AppearanceSettings } from './appearance';
+import type { BackgroundUrls } from './appearance';
+import { uuid } from './uuid';
 
 const store = new Map<string, Bootstrap>();
 const MAX_ENTRIES = 6;
 const NAME_PREFIX = 'ekko-tools:page-cache:';
+const backgroundSession = typeof window === 'undefined'
+  ? uuid()
+  : ((window as any).__EK_TOOLS_BACKGROUND_SESSION__ ||= uuid());
 interface PageCache {
   key: string;
   boot?: Bootstrap;
   appearance?: AppearanceSettings;
+  backgrounds?: BackgroundUrls;
+  backgroundSession?: string;
   views?: Record<string, unknown>;
 }
 
@@ -38,9 +45,19 @@ export function readAppearanceCache(ctx: ClientHost) {
   return key ? readPageCache(key)?.appearance : undefined;
 }
 
-export function writeAppearanceCache(ctx: ClientHost, value: AppearanceSettings) {
+export function readBackgroundCache(ctx: ClientHost) {
   const key = cacheKey(ctx);
-  if (key) writePageCache({ ...readPageCache(key), key, appearance: value });
+  const page = key ? readPageCache(key) : undefined;
+  if (!page || page.backgroundSession !== backgroundSession) return undefined;
+  return page.backgrounds;
+}
+
+export function writeAppearanceCache(ctx: ClientHost, value: AppearanceSettings, backgrounds?: BackgroundUrls) {
+  const key = cacheKey(ctx);
+  if (key) writePageCache({
+    ...readPageCache(key), key, appearance: value,
+    ...(backgrounds ? { backgrounds, backgroundSession } : {})
+  });
 }
 
 export function readViewCache<T>(ctx: ClientHost, name: string) {

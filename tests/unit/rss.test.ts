@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { parseSubscription } from '../../src/server/rss/parse';
 import { RssService } from '../../src/server/rss/service';
+import { RssStore } from '../../src/server/rss/store';
 import { AppError } from '../../src/shared/error-codes';
 import type { FetchedPage } from '../../src/server/rss/fetch';
 import { contract } from '../../src/server/index';
@@ -96,6 +97,17 @@ describe('RSS 本地库', () => {
     expect(saved.articleCustomCss).toHaveLength(12000);
     expect(() => validateModel(contract, 'rssSettings', saved)).not.toThrow();
     rss.close();
+  });
+
+  it('多语句写入失败时整体回滚，不留下半条订阅数据', async () => {
+    const directory = await tempdir(); directories.push(directory);
+    const store = new RssStore(join(directory, 'rss', 'rss.db'));
+    expect(() => store.transaction(() => {
+      store.run('INSERT INTO folders(id,name,created_at) VALUES(?,?,?)', ['rollback', '回滚', Date.now()]);
+      throw new Error('fixture failure');
+    })).toThrow('fixture failure');
+    expect(store.get("SELECT id FROM folders WHERE id='rollback'")).toBeUndefined();
+    store.close();
   });
 
   it('添加订阅、分页、已读与收藏', async () => {
@@ -285,6 +297,24 @@ describe('RSS 本地库', () => {
     expect(rss.moveFeed(feed.id)).toEqual({ ok: true });
     expect(rss.bootstrap().feeds[0].folderId).toBeUndefined();
     expect(() => rss.moveFeed(feed.id, 'missing')).toThrowError();
+    rss.close();
+  });
+
+  it('订阅源可重命名，刷新后保留自定义名称', async () => {
+    const directory = await tempdir(); directories.push(directory);
+    let siteTitle = '原始名称';
+    const rss = service(directory, async url =>
+      page(url, rssFeed(siteTitle, [{ id: '1', title: '文章', url: 'https://example.com/1' }])));
+    const { feed } = await rss.addFeed({ url: 'https://example.com/feed.xml' });
+    const renamed = rss.renameFeed(feed.id, '  我的订阅  ');
+    expect(renamed.feed.title).toBe('我的订阅');
+    expect(() => validateModel(contract, 'rssFeedOutput', renamed)).not.toThrow();
+    expect(rss.bootstrap().feeds[0].title).toBe('我的订阅');
+    expect(rss.listEntries({}).items[0].feedTitle).toBe('我的订阅');
+    siteTitle = '源站新名称';
+    await rss.refresh();
+    expect(rss.bootstrap().feeds[0].title).toBe('我的订阅');
+    expect(() => rss.renameFeed('missing', '名称')).toThrowError();
     rss.close();
   });
 

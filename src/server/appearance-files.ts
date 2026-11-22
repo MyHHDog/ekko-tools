@@ -15,9 +15,11 @@ export interface BackgroundMeta {
   bytes: number;
   updatedAt: number;
 }
+export type BackgroundSlot = 'desktop' | 'mobile';
 
 interface Upload {
   partition: string;
+  slot: BackgroundSlot;
   name: string;
   mime: string;
   chunks: Buffer[];
@@ -39,8 +41,12 @@ export class AppearanceFiles {
     return join(this.dataDir, 'appearance');
   }
 
-  private file(partition: string) {
-    return join(this.directory(), `${partition}.img`);
+  private file(partition: string, slot: BackgroundSlot) {
+    return join(this.directory(), slot === 'mobile' ? `${partition}-mobile.img` : `${partition}.img`);
+  }
+
+  private metaKey(slot: BackgroundSlot) {
+    return slot === 'mobile' ? 'appearance-bg-mobile-meta' : 'appearance-bg-meta';
   }
 
   private prune(now = Date.now()) {
@@ -49,7 +55,7 @@ export class AppearanceFiles {
     }
   }
 
-  start(partition: string, name: string, mime: string) {
+  start(partition: string, slot: BackgroundSlot, name: string, mime: string) {
     assert(typeof name === 'string' && name.trim().length > 0 && name.length <= 120);
     assert(['image/jpeg', 'image/png', 'image/webp'].includes(mime));
     this.prune();
@@ -59,7 +65,7 @@ export class AppearanceFiles {
     }
     const uploadId = randomUUID();
     this.uploads.set(uploadId, {
-      partition, name: name.trim(), mime, chunks: [], bytes: 0, at: Date.now()
+      partition, slot, name: name.trim(), mime, chunks: [], bytes: 0, at: Date.now()
     });
     return { uploadId };
   }
@@ -78,10 +84,10 @@ export class AppearanceFiles {
     return { received: upload.bytes };
   }
 
-  async complete(partition: string, store: Store, uploadId: string, name: string, mime: string) {
+  async complete(partition: string, store: Store, uploadId: string, name: string, mime: string, slot: BackgroundSlot) {
     this.prune();
     const upload = this.uploads.get(uploadId);
-    assert(upload && upload.partition === partition);
+    assert(upload && upload.partition === partition && upload.slot === slot);
     assert(upload.name === name.trim() && upload.mime === mime);
     const body = Buffer.concat(upload.chunks);
     assert(body.length > 0 && body.length <= maxBytes);
@@ -90,26 +96,26 @@ export class AppearanceFiles {
     const meta: BackgroundMeta = {
       name: upload.name.slice(0, 120), mime: actual, bytes: body.length, updatedAt: Date.now()
     };
-    await this.write(partition, body);
-    await store.set('appearance-bg-meta', meta);
+    await this.write(partition, upload.slot, body);
+    await store.set(this.metaKey(upload.slot), meta);
     this.uploads.delete(uploadId);
     return meta;
   }
 
-  async get(partition: string, store: Store) {
-    const meta = await store.get<BackgroundMeta>('appearance-bg-meta');
+  async get(partition: string, store: Store, slot: BackgroundSlot = 'desktop') {
+    const meta = await store.get<BackgroundMeta>(this.metaKey(slot));
     if (!validMeta(meta)) return undefined;
     try {
-      const info = await stat(this.file(partition));
+      const info = await stat(this.file(partition, slot));
       return info.size === meta.bytes ? meta : undefined;
     } catch {
-      await store.delete('appearance-bg-meta');
+      await store.delete(this.metaKey(slot));
       return undefined;
     }
   }
 
-  async read(partition: string, store: Store, offset: number, length = readBytes) {
-    const meta = await this.get(partition, store);
+  async read(partition: string, store: Store, offset: number, length = readBytes, slot: BackgroundSlot = 'desktop') {
+    const meta = await this.get(partition, store, slot);
     assert(meta);
     assert(Number.isInteger(offset) && offset >= 0 && offset < meta.bytes);
     assert(Number.isInteger(length) && length > 0);
@@ -118,7 +124,7 @@ export class AppearanceFiles {
     const size = wanted === remaining ? wanted : wanted - (wanted % 3);
     assert(size > 0);
     const buffer = Buffer.allocUnsafe(size);
-    const handle = await open(this.file(partition), 'r');
+    const handle = await open(this.file(partition, slot), 'r');
     try {
       const result = await handle.read(buffer, 0, size, offset);
       assert(result.bytesRead === size);
@@ -133,7 +139,7 @@ export class AppearanceFiles {
   }
 
   async migrate(partition: string, store: Store) {
-    const existing = await this.get(partition, store);
+    const existing = await this.get(partition, store, 'desktop');
     if (existing) return existing;
     const legacy = await store.get<string>('appearance-bg');
     if (typeof legacy !== 'string' || !legacy) return undefined;
@@ -145,7 +151,7 @@ export class AppearanceFiles {
       assert(mime === match[1].toLowerCase() && body.length <= maxBytes);
       const name = String(await store.get('appearance-bg-name') || 'background').slice(0, 120);
       const meta: BackgroundMeta = { name, mime, bytes: body.length, updatedAt: Date.now() };
-      await this.write(partition, body);
+      await this.write(partition, 'desktop', body);
       await store.delete('appearance-bg');
       await store.delete('appearance-bg-name');
       await store.set('appearance-bg-meta', meta);
@@ -157,20 +163,22 @@ export class AppearanceFiles {
     }
   }
 
-  async clear(partition: string, store: Store) {
-    await rm(this.file(partition), { force: true });
-    await store.delete('appearance-bg-meta');
-    await store.delete('appearance-bg');
-    await store.delete('appearance-bg-name');
+  async clear(partition: string, store: Store, slot: BackgroundSlot = 'desktop') {
+    await rm(this.file(partition, slot), { force: true });
+    await store.delete(this.metaKey(slot));
+    if (slot === 'desktop') {
+      await store.delete('appearance-bg');
+      await store.delete('appearance-bg-name');
+    }
   }
 
   dispose() {
     this.uploads.clear();
   }
 
-  private async write(partition: string, body: Buffer) {
+  private async write(partition: string, slot: BackgroundSlot, body: Buffer) {
     await mkdir(this.directory(), { recursive: true });
-    const target = this.file(partition);
+    const target = this.file(partition, slot);
     const temp = `${target}.${randomUUID()}.tmp`;
     await writeFile(temp, body);
     try {

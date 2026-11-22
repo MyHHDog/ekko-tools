@@ -1,22 +1,20 @@
-/* ekko-tools design tokens v2 —— 对齐 ekko-sidebar-design 月夜白花主题。
- * 插件运行在独立 iframe：颜色、圆角与材质全部内置，避免宿主亮色主题覆盖设计稿。
- * 背景图由 main.tsx 通过构建期 data URL 注入 --ek-bg-image。
- */
+/* Studio 中性主题回退值；实际颜色直接读取宿主公开主题变量。 */
 :root {
-  color-scheme: dark;
+  color-scheme: light;
   /* 圆角 */
-  --ek-radius-global: 23px;
-  --ek-radius-chrome: 15px;
-  --ek-radius-card: 21px;
-  --ek-radius-input: 20px;
+  --ek-radius-global: 8px;
+  --ek-radius-chrome: 8px;
+  --ek-radius-card: 8px;
+  --ek-radius-input: 6px;
   --ek-radius-sidebar: 0px;
   --ek-radius-content: 0px;
-  --ek-radius-sm: 16px;
+  --ek-radius-overlay: 8px;
+  --ek-radius-sm: 6px;
   --ek-radius-pill: 999px;
   /* 尺寸 */
-  --ek-control-h: 41px;
-  --ek-control-h-sm: 36px;
-  --ek-border-w: 2.5px;
+  --ek-control-h: 36px;
+  --ek-control-h-sm: 32px;
+  --ek-border-w: 1px;
   --ek-hairline: 1px;
   --ek-iconbar-w: 64px;
   --ek-panel-w: 320px;
@@ -24,18 +22,25 @@
   --ek-panel-max: 360px;
   --ek-icon: 20px;
   --ek-row-mail-h: 72px;
+  --ek-viewport-height: 100dvh;
   /* 间距 */
-  --ek-sp-1: calc(4px * var(--ek-spacing-scale, 1.1));
-  --ek-sp-2: calc(8px * var(--ek-spacing-scale, 1.1));
-  --ek-sp-3: calc(12px * var(--ek-spacing-scale, 1.1));
-  --ek-sp-4: calc(16px * var(--ek-spacing-scale, 1.1));
-  --ek-sp-5: calc(20px * var(--ek-spacing-scale, 1.1));
-  --ek-sp-6: calc(28px * var(--ek-spacing-scale, 1.1));
+  --ek-sp-1: calc(4px * var(--ek-spacing-scale, 1));
+  --ek-sp-2: calc(8px * var(--ek-spacing-scale, 1));
+  --ek-sp-3: calc(12px * var(--ek-spacing-scale, 1));
+  --ek-sp-4: calc(16px * var(--ek-spacing-scale, 1));
+  --ek-sp-5: calc(20px * var(--ek-spacing-scale, 1));
+  --ek-sp-6: calc(28px * var(--ek-spacing-scale, 1));
   /* 阴影与字体 */
-  --ek-shadow-color: rgba(4, 15, 32, 0.50);
-  --ek-shadow: 0 14px 38px var(--ek-shadow-color);
-  --ek-shadow-comic: 0 4px 0 rgba(4, 15, 32, 0.28);
-  --ek-shadow-float: 0 22px 64px rgba(3, 12, 27, 0.38);
+  --ek-shadow-color: transparent;
+  --ek-shadow: none;
+  --ek-shadow-comic: none;
+  --ek-shadow-float: none;
+  --ek-shadow-chrome: none;
+  --ek-shadow-sidebar: none;
+  --ek-shadow-content: none;
+  --ek-shadow-card: none;
+  --ek-shadow-input: none;
+  --ek-shadow-overlay: none;
   /* 字体与字号直接读取 Studio 注入的 --font-family / --font-size-base，保证与当前主题一致。 */
   --ek-font-ui: var(--font-family, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif);
   --ek-font-read: var(--font-family, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", sans-serif);
@@ -46,60 +51,119 @@
   --ek-fs-md: calc(var(--ek-fs-base) * 1.143);
   --ek-fs-lg: calc(var(--ek-fs-base) * 1.429);
   --ek-fs-xl: calc(var(--ek-fs-base) * 1.786);
-  --ek-lh: 1.6;
+  --ek-lh: var(--line-height, 1.6);
   --ek-lh-read: 1.9;
-  --ek-ls: -0.6px;
-  --ek-ls-sm: -0.4px;
-  --ek-ls-read: -0.1px;
+  --ek-ls: var(--letter-spacing, 0px);
+  --ek-ls-sm: var(--letter-spacing, 0px);
+  --ek-ls-read: 0px;
   --ek-fw-regular: 400;
   --ek-fw-bold: 600;
   --ek-dur: 140ms;
   --ek-ease: cubic-bezier(.2, .7, .3, 1);
-  /* 深蓝玻璃材质 */
-  --ek-bg-solid: #16294a;
-  --ek-bg-panel: rgba(18, 36, 64, 0.40);
-  --ek-bg-panel-2: rgba(18, 36, 64, 0.24);
-  --ek-bg-surface: rgba(24, 45, 76, 0.48);
-  --ek-bg-surface-2: rgba(19, 38, 65, 0.36);
-  --ek-bg-input: rgba(13, 30, 53, 0.44);
-  --ek-bg-hover: rgba(211, 227, 252, 0.10);
-  --ek-bg-selected: rgba(132, 168, 226, 0.22);
-  --ek-bg-image: linear-gradient(155deg, var(--ek-bg-panel), var(--ek-bg-panel-2));
-  --ek-border: rgba(195, 213, 245, 0.20);
-  --ek-border-light: rgba(195, 213, 245, 0.10);
-  --ek-glow: rgba(152, 185, 245, 0.22);
-  --ek-scrim: rgba(7, 19, 36, 0.30);
-  --ek-scrim-deep: rgba(6, 17, 33, 0.58);
-  --ek-header-veil: rgba(18, 36, 64, 0.16);
-  --ek-glass-highlight: rgba(236, 244, 255, 0.09);
-  --ek-glass-border: rgba(195, 213, 245, 0.24);
-  --ek-panel-ridge: rgba(236, 244, 255, 0.06);
+  /* Studio 表面层级：浅色 page #fafafa，content/sidebar 为白；深色见下方覆盖。 */
+  --ek-studio-page: #fafafa;
+  --ek-studio-surface: #fff;
+  --ek-bg-page: var(--bg-primary,var(--ek-studio-page));
+  --ek-bg-solid: var(--ek-bg-page);
+  --ek-bg-base: var(--bg-primary,var(--ek-studio-page));
+  --ek-bg-shell: var(--theme-chrome-bg,var(--bg-primary,var(--ek-studio-page)));
+  --ek-bg-sidebar: var(--theme-sidebar-bg,var(--bg-sidebar-surface,var(--bg-card,var(--ek-studio-surface))));
+  --ek-bg-panel: var(--ek-bg-sidebar);
+  --ek-bg-content: var(--theme-content-bg,var(--bg-main-surface,var(--bg-card,var(--ek-studio-surface))));
+  --ek-bg-panel-2: var(--theme-card-bg,var(--bg-card,var(--ek-studio-surface)));
+  --ek-bg-surface: var(--theme-card-bg,var(--bg-card,var(--ek-studio-surface)));
+  --ek-bg-surface-2: var(--theme-input-bg,var(--bg-input,var(--ek-studio-surface)));
+  --ek-bg-input: var(--theme-input-bg,var(--bg-input,var(--ek-studio-surface)));
+  --ek-bg-raised: var(--theme-overlay-bg,var(--bg-card,var(--ek-studio-surface)));
+  --ek-bg-hover: color-mix(in srgb,var(--text-primary,#1a1a1a) 6%,transparent);
+  --ek-bg-selected: color-mix(in srgb,var(--accent-primary,#333) 12%,transparent);
+  --ek-border: var(--border-color,#e0e0e0);
+  --ek-border-light: var(--border-light,#ebebeb);
+  --ek-border-chrome: var(--ek-border);
+  --ek-border-sidebar: var(--ek-border);
+  --ek-border-content: var(--ek-border);
+  --ek-border-card: var(--ek-border);
+  --ek-border-input: var(--ek-border);
+  --ek-border-overlay: var(--ek-border);
+  --ek-content-max: 960px;
+  --ek-user-bg-size: cover;
+  --ek-user-bg-position: center top;
+  --ek-bg-gradient: none;
+  --ek-scrim: rgb(0 0 0 / 20%);
+  --ek-scrim-deep: rgb(0 0 0 / 42%);
+  --ek-glass-highlight: transparent;
+  --ek-glass-border: var(--border-color,#e0e0e0);
+  --ek-panel-ridge: transparent;
+  --ek-glass-edge: none;
+  /* Studio 区域玻璃默认值：chrome 60% / sidebar 78% / content 86%。 */
+  --ek-glass-chrome-bg: var(--glass-chrome-bg,var(--theme-chrome-bg,color-mix(in srgb,var(--bg-primary,var(--ek-studio-page)) 60%,transparent)));
+  --ek-glass-sidebar-bg: var(--glass-sidebar-bg,var(--theme-sidebar-bg,color-mix(in srgb,var(--bg-sidebar-surface,var(--bg-card,var(--ek-studio-surface))) 78%,transparent)));
+  --ek-glass-content-bg: var(--glass-content-bg,var(--theme-content-bg,color-mix(in srgb,var(--bg-main-surface,var(--bg-card,var(--ek-studio-surface))) 86%,transparent)));
+  --ek-glass-card-bg: var(--theme-card-bg,color-mix(in srgb,var(--bg-card,var(--ek-studio-surface)) 72%,transparent));
+  --ek-glass-input-bg: var(--theme-input-bg,color-mix(in srgb,var(--bg-input,var(--ek-studio-surface)) 72%,transparent));
+  --ek-glass-overlay-bg: var(--theme-overlay-bg,color-mix(in srgb,var(--bg-card,var(--ek-studio-surface)) 72%,transparent));
+  --ek-glass-chrome-filter: var(--theme-chrome-filter,blur(16px) saturate(1.1));
+  --ek-glass-sidebar-filter: var(--theme-sidebar-filter,blur(12px) saturate(1.1));
+  --ek-glass-content-filter: var(--theme-content-filter,blur(8px) saturate(1.1));
+  --ek-glass-card-filter: var(--theme-card-filter,blur(8px) saturate(1.1));
+  --ek-glass-input-filter: var(--theme-input-filter,blur(8px) saturate(1.1));
+  --ek-glass-overlay-filter: var(--theme-overlay-filter,blur(8px) saturate(1.1));
   /* 文本与强调 */
-  --ek-text: #ecf1fa;
-  --ek-text-2: #aabbd3;
-  --ek-text-muted: #8ea4c2;
-  --ek-link: #c3d8fa;
-  --ek-accent: #4266a7;
-  --ek-accent-hover: #5077b9;
-  --ek-accent-soft: rgba(151, 185, 236, 0.18);
-  --ek-on-accent: #f7faff;
-  --ek-focus: #98b9f5;
-  --ek-info: #98b9f5;
-  --ek-success: #a9c8bd;
-  --ek-error: #d8aaa4;
-  --ek-warning: #d9c49c;
-  --ek-success-bg: rgba(154, 191, 180, 0.12);
-  --ek-error-bg: rgba(173, 142, 132, 0.14);
-  --ek-warning-bg: rgba(216, 195, 154, 0.12);
-  --ek-skeleton: rgba(169, 195, 231, 0.16);
-  --ek-selection: rgba(118, 159, 211, 0.42);
+  --ek-text: var(--text-primary,#1a1a1a);
+  --ek-text-2: var(--text-secondary,#666);
+  --ek-text-muted: var(--text-muted,#999);
+  --ek-link: var(--ek-accent);
+  --ek-accent-default: #333;
+  --ek-on-accent-default: #fff;
+  --ek-accent: var(--ek-accent-default);
+  --ek-accent-hover: color-mix(in srgb,var(--ek-accent) 86%,white);
+  --ek-accent-soft: var(--ek-bg-selected);
+  --ek-on-accent: var(--ek-on-accent-default);
+  --ek-focus: color-mix(in srgb,var(--ek-accent) 72%,var(--ek-text));
+  --ek-info: var(--ek-accent);
+  --ek-success: var(--success,#2e7d32);
+  --ek-error: var(--error,#c62828);
+  --ek-warning: var(--warning,#f57f17);
+  --ek-success-bg: color-mix(in srgb,var(--success,#2e7d32) 10%,transparent);
+  --ek-error-bg: color-mix(in srgb,var(--error,#c62828) 10%,transparent);
+  --ek-warning-bg: color-mix(in srgb,var(--warning,#f57f17) 10%,transparent);
+  --ek-skeleton: color-mix(in srgb,var(--text-primary,#1a1a1a) 8%,transparent);
+  --ek-selection: color-mix(in srgb,var(--accent-primary,#333) 18%,transparent);
   /* 邮件来源色 */
-  --ek-src-163: #c4b6e8;
-  --ek-src-163-bg: rgba(173, 158, 211, 0.15);
-  --ek-src-qq: #a9cdea;
-  --ek-src-qq-bg: rgba(121, 181, 221, 0.15);
-  --ek-src-gmail: #d9c3c8;
-  --ek-src-gmail-bg: rgba(179, 130, 139, 0.15);
+  --ek-src-163: #6a4a8b;
+  --ek-src-163-bg: #f1ebf7;
+  --ek-src-qq: #2f6888;
+  --ek-src-qq-bg: #e9f2f6;
+  --ek-src-gmail: #8f4b53;
+  --ek-src-gmail-bg: #f7eef0;
+}
+/* Studio 深色主题：page/chrome/sidebar #1a1a1a，content 玻璃基色为卡片 #2a2a2a。 */
+:root[data-ek-studio-theme=dark]{
+  --ek-studio-page: #1a1a1a;
+  --ek-studio-surface: #1a1a1a;
+  --ek-glass-chrome-bg: var(--glass-chrome-bg,var(--theme-chrome-bg,color-mix(in srgb,var(--bg-primary,var(--ek-studio-page)) 90%,transparent)));
+  --ek-glass-sidebar-bg: var(--glass-sidebar-bg,var(--theme-sidebar-bg,color-mix(in srgb,var(--bg-sidebar-surface,var(--bg-primary,var(--ek-studio-page))) 78%,transparent)));
+  --ek-glass-content-bg: var(--glass-content-bg,var(--theme-content-bg,color-mix(in srgb,var(--bg-main-surface,var(--bg-card,var(--ek-studio-surface))) 82%,transparent)));
+}
+:root[data-ek-studio-theme=dark]:not([data-ek-studio-surface=custom]):not([data-ek-custom-background]){
+  --ek-bg-shell: var(--theme-chrome-bg,var(--bg-primary,var(--ek-studio-page)));
+  --ek-bg-sidebar: var(--theme-sidebar-bg,var(--bg-sidebar-surface,var(--bg-main-surface,var(--bg-primary,var(--ek-studio-page)))));
+  --ek-bg-content: var(--theme-content-bg,var(--bg-main-surface,var(--bg-primary,var(--ek-studio-page))));
+}
+:root[data-ek-custom-background]{
+  --ek-bg-shell: var(--theme-chrome-bg,var(--ek-glass-chrome-bg));
+  --ek-bg-sidebar: var(--theme-sidebar-bg,var(--ek-glass-sidebar-bg));
+  --ek-bg-panel: var(--theme-sidebar-bg,var(--ek-glass-sidebar-bg));
+  --ek-bg-content: var(--theme-content-bg,var(--ek-glass-content-bg));
+  --ek-bg-panel-2: var(--theme-card-bg,var(--ek-glass-card-bg));
+  --ek-bg-surface: var(--theme-card-bg,var(--ek-glass-card-bg));
+  --ek-bg-surface-2: var(--theme-input-bg,var(--ek-glass-card-bg));
+  --ek-bg-input: var(--theme-input-bg,var(--ek-glass-card-bg));
+  --ek-bg-raised: var(--theme-overlay-bg,var(--ek-glass-overlay-bg));
+  --ek-glass-border: color-mix(in srgb,var(--ek-border) 72%,transparent);
+  --ek-shadow-color: transparent;
+  --ek-shadow: none;
+  --ek-shadow-float: 0 12px 32px rgb(0 0 0 / 16%);
 }
 @media (prefers-reduced-motion: reduce) {
   :root { --ek-dur: 0ms; }

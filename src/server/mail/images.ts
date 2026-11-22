@@ -2,7 +2,8 @@ import {lookup} from 'node:dns/promises';
 import type {LookupAddress} from 'node:dns';
 import {isIP} from 'node:net';
 import type {LookupFunction} from 'node:net';
-import {request} from 'node:https';
+import {request as httpRequest} from 'node:http';
+import {request as httpsRequest} from 'node:https';
 import sanitize from 'sanitize-html';
 import {AppError,assert} from '../../shared/error-codes';
 import type {Lifecycle} from '../adapter/host';
@@ -34,21 +35,23 @@ export function createPinnedLookup(results:LookupAddress[]):LookupFunction{
     callback(null,first.address,first.family);
   };
 }
-export async function image(urlString:string,signal:AbortSignal,lifecycle:Lifecycle,allowedDomains:readonly string[]=[]):Promise<string>{
-  return bounded(s=>load(urlString,s,lifecycle,allowedDomains,0),signal,lifecycle,10000);
+export async function image(urlString:string,signal:AbortSignal,lifecycle:Lifecycle,allowedDomains:readonly string[]=[],upgradeHttp=true):Promise<string>{
+  return bounded(s=>load(urlString,s,lifecycle,allowedDomains,upgradeHttp,0),signal,lifecycle,10000);
 }
-function imageUrl(value:string){
+function imageUrl(value:string,upgradeHttp:boolean){
   const url=new URL(value);
-  if(url.protocol==='http:'){url.protocol='https:';if(url.port==='80')url.port='';}
-  assert(url.protocol==='https:'&&!url.username&&!url.password&&(!url.port||url.port==='443'));
+  if(url.protocol==='http:'&&upgradeHttp){url.protocol='https:';if(url.port==='80')url.port='';}
+  const port=url.protocol==='http:'?(!url.port||url.port==='80'):url.protocol==='https:'?(!url.port||url.port==='443'):false;
+  assert((url.protocol==='http:'||url.protocol==='https:')&&!url.username&&!url.password&&port);
   return url;
 }
-async function load(urlString:string,signal:AbortSignal,lifecycle:Lifecycle,allowedDomains:readonly string[],redirects:number):Promise<string>{
-  const url=imageUrl(urlString);
-  if(redirects===0)assert(allowedDomains.includes(url.hostname.toLowerCase()));
+async function load(urlString:string,signal:AbortSignal,lifecycle:Lifecycle,allowedDomains:readonly string[],upgradeHttp:boolean,redirects:number):Promise<string>{
+  const url=imageUrl(urlString,upgradeHttp);
+  if(redirects===0&&allowedDomains.length)assert(allowedDomains.includes(url.hostname.toLowerCase()));
   const results=await lookup(url.hostname,{all:true});assert(results.length&&results.every(r=>publicAddress(r.address)));
   if(signal.aborted)throw new AppError('TIMEOUT');
   const pinnedLookup=createPinnedLookup(results);
+  const request=url.protocol==='https:'?httpsRequest:httpRequest;
   const result=await new Promise<{redirect?:string;data?:string}>((resolve,reject)=>{
     let finished=false,release:()=>unknown=()=>{};
     const finish=(error?:Error,value?:{redirect?:string;data?:string})=>{if(finished)return;finished=true;release();signal.removeEventListener('abort',abort);error?reject(error):resolve(value!);};
@@ -56,8 +59,9 @@ async function load(urlString:string,signal:AbortSignal,lifecycle:Lifecycle,allo
       response.on('error',()=>finish(new AppError('NETWORK_UNREACHABLE')));
       const status=response.statusCode||0,location=String(response.headers.location||'');
       if([301,302,303,307,308].includes(status)&&location){response.resume();finish(undefined,{redirect:new URL(location,url).toString()});return;}
-      const mime=String(response.headers['content-type']||'').split(';')[0].toLowerCase();
-      if(status!==200||!/^image\/(png|jpeg|gif|webp|avif|bmp)$/.test(mime)){response.destroy();finish(new AppError('VALIDATION'));return;}
+      let mime=String(response.headers['content-type']||'').split(';')[0].toLowerCase();
+      if(mime==='application/octet-stream'&&/\.ico$/i.test(url.pathname))mime='image/x-icon';
+      if(status!==200||!/^image\/(png|jpeg|gif|webp|avif|bmp|x-icon|vnd\.microsoft\.icon|svg\+xml)$/.test(mime)){response.destroy();finish(new AppError('VALIDATION'));return;}
       const chunks:Buffer[]=[];let total=0;
       response.on('data',chunk=>{total+=chunk.length;if(total>MAX_IMAGE_BYTES){response.destroy();finish(new AppError('ATTACHMENT_TOO_LARGE'));}else chunks.push(chunk);});
       response.on('end',()=>finish(undefined,{data:`data:${mime};base64,${Buffer.concat(chunks).toString('base64')}`}));
@@ -67,6 +71,6 @@ async function load(urlString:string,signal:AbortSignal,lifecycle:Lifecycle,allo
     req.setTimeout(10000,abort);req.on('error',()=>finish(new AppError('NETWORK_UNREACHABLE')));
     if(signal.aborted)abort();else req.end();
   });
-  if(result.redirect){assert(redirects<3,'VALIDATION');return load(result.redirect,signal,lifecycle,allowedDomains,redirects+1);}
+  if(result.redirect){assert(redirects<3,'VALIDATION');return load(result.redirect,signal,lifecycle,allowedDomains,upgradeHttp,redirects+1);}
   return result.data!;
 }

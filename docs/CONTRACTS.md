@@ -3,27 +3,62 @@
 唯一事实来源是 [`contracts/plugin.json`](<../contracts/plugin.json>)（schemaVersion 1）。
 本文是人读摘要；字段级含义以契约文件内每个模型的 description 为准。
 `npm run harness:check` 用 vendored SDK（`sdk/harness/`）校验本契约结构与模型方言；
-`src/server/index.ts` 在 `apply()` 时加载同一文件，对所有 RPC 入参与返回值执行
+`src/server/contract.ts` 加载同一文件，`src/server/index.ts` 对所有 RPC 入参与返回值执行
 `validateModel` 双向校验，违反契约按 `VALIDATION`（入参）/`INTERNAL`（出参，失败关闭）返回。
 
 ## 结构总览
 
-- **models（63 个）**：跨边界与持久化结构。嵌套结构无法 `$ref` 引用（契约方言仅允许
+- **models（137 个）**：跨边界与持久化结构。嵌套结构无法 `$ref` 引用（契约方言仅允许
   type/description/properties/required/additionalProperties/items/enum/min/max 12 个关键字），
   因此 errorInfo/connectionState/account 等在深层内联，内联副本的 description 指回顶层模型。
-- **rpc（23 个）**：每个 RPC 声明 `input`/`output` 模型名。客户端 `call()` 总是注入
+- **rpc（62 个）**：每个 RPC 声明 `input`/`output` 模型名。客户端 `call()` 总是注入
   `__requestId`；`__owner` 为内部字段，已在模型中显式登记。
   `translateInput.text` 的 5000 字限制由服务端 `validateRequest` 语义化执行（返回
   `INPUT_TOO_LONG`），不在模型层拦截，避免把可操作错误降级为通用 `VALIDATION`。
-- **events（4 个）**：`account.state` / `mail.arrived` / `mail.read` / `translate.progress`，
-  `audience: plugin`，载荷均带 `eventId` 供客户端去重（事件不保证补发/顺序）。
-- **storage（14 个）**：全部在 `users/{userId}/profiles/{profile}` 分区（legacy settings 在
+  外观 RPC 按身份独立排队，避免被其他设置操作阻塞。保存超时后客户端只回读 `appearance.get`，
+  可编辑字段均与提交值一致才确认成功；背景文件名由服务端管理，不参与确认。
+  手动保存失败时页面显示随机诊断编号；宿主日志记录该编号及处理阶段，核对读取用同一编号加 `-check`。
+  诊断不记录外观值、图片名或图片内容。
+  `appearance.save` 通过 `ctx.rpc` 发送 `appearanceSaveInput.wire`（v1 紧凑快照）。
+  Studio App 把移动插件请求编码进 WebView 标题，iOS WebKit 发给原生端的标题最多 1000 字符；
+  旧版完整 JSON 编码后会被截断，原生端无法解码并回执。紧凑格式不发送字段名或背景文件名，
+  顺序由 `src/shared/appearance-wire.ts` 定义；空覆盖延续原有继承/默认值，格式变更需升级版本。
+  服务端拒绝不完整或混合格式，仍接受旧版逐字段对象；存储模型、背景文件和刷新事件不变。
+- **events（7 个）**：`account.state` / `mail.arrived` / `mail.read` / `mail.deleted` / `translate.progress` /
+  `rss.updated` / `appearance.updated`，`audience: plugin`，载荷均带 `eventId` 供客户端去重（事件不保证补发/顺序）。
+  `appearance.updated` 只携带 `updatedAt`，其他已打开页面收到后重新读取外观与背景。
+- **storage（21 个）**：全部在 `users/{userId}/profiles/{profile}` 分区（legacy settings 在
   `legacy/{userId}/{profile}`），`version: 1` 预留迁移。数组类存储（accounts/mail-cache/
   history）的元素在模型中以"引用顶层模型 + 宽松承载"声明；严格字段以顶层模型为准。
   动态键映射（read/translated/bilingual/images/mail-sync/mail-known/mail-body）用
   `additionalProperties: true`。
   运行时按每次 RPC 重新绑定存储作用域；所有写入先做 JSON 清洗并丢弃 `undefined`。
 - **tools/commands/actions/checkpoints**：本插件未使用，显式 `{}`。
+
+## 持久化边界
+
+页面只通过 RPC 读取持久数据；写入按“业务真相可恢复、派生缓存可重建、运行时状态不落盘”分层：
+邮件库位于 `dataDir/<partition>/mail/mail.db`，阅读库位于 `dataDir/<partition>/rss/rss.db`。
+
+| 数据 | 位置 | 用途 |
+| --- | --- | --- |
+| `accounts` / `sync_state` | SQLite | 账号元数据、首次同步、游标、错误与 `knownCount` |
+| `messages` / `known_messages` | SQLite | 摘要、未读回退、已见索引；通知只对比该索引 |
+| `drafts` / `draft_attachments` | 邮件 SQLite | 每身份最多 100 份草稿与 100 MiB 附件内容；旧库自动增列与建表，原草稿默认纯文本且无附件；删除草稿级联删除文件，移除发件账号不删除草稿 |
+| `read_state` / `read_pending` | SQLite | 本机已读与待回写 IMAP 的覆盖值；逐封原子更新，回写成功后清除待回写 |
+| `translated_state` / 正文文件 | SQLite + `mail-bodies` | 列表译标记与按需正文，正文索引有容量上限 |
+| `bilingual` / `images` | 邮件 SQLite | 有界派生缓存；重启后复用，缺失可重算 |
+| RSS 分组/订阅/文章/已读/收藏/设置/抓取运行 | RSS SQLite | 阅读业务真相；刷新、分页与未读统计只读本地库 |
+| RSS `summaries` / `digests` | RSS SQLite | 派生结果持久化复用；删除后可按文章或周期重新生成 |
+| 翻译历史 `history` | 宿主键值库 | 用户可见业务记录，≤50 条；服务内串行追加，翻译页与邮件双语共享 |
+| 翻译结果 `translate-cache` | 宿主键值库 | 有界派生缓存，≤100 条/512KB；丢失后重新请求 Provider |
+| `preferences` / `appearance` / 背景元数据 | 宿主键值库 | 小对象偏好与文件索引；密钥只进加密 vault |
+| 自定义背景原图 | `dataDir/appearance/*.img` | 大二进制不进键值库，按身份与桌面/移动槽位分文件、按块读取 |
+| 首屏、视图与背景 Blob | 客户端内存 + `window.name` | 仅加速页面重挂载，不能作为业务真相 |
+
+仅保存在进程内的是：邮件正文 LRU、双语/远程图片热缓存、翻译缓存热层、媒体代理缓存、
+IMAP 连接池与 UIDVALIDITY 快照、RSS 正文提取去重、背景上传分块、后台失败计数、同步互斥与诊断日志。
+这些状态均可由 SQLite、文件或网络重建，不能作为未读、已见、通知或业务历史的唯一来源。
 
 ## RPC 一览（input → output）
 
@@ -37,16 +72,40 @@
 | `translate.test` | providerTestInput → providerTestResult | 连接测试，不写历史/缓存 |
 | `translate.cache-stats` / `translate.cache-clear` | requestIdOnly → cacheStats | 缓存统计与清理 |
 | `settings.get` / `settings.save` | requestIdOnly/settingsSaveInput → settingsGetOutput/settingsSaveOutput | 密钥只回 configured；含通知设置 |
-| `mail.account.add/remove/test` | addAccountInput/accountIdInput → account/removeAccountOutput/connectionState | 账号管理 |
+| `mail.account.add/rename/remove/test` | addAccountInput/mailAccountRenameInput/accountIdInput → account/removeAccountOutput/connectionState | 账号管理与本地别名 |
 | `mail.list` / `mail.get` | mailListInput/mailGetInput → mailPage/mailMessage | 列表与详情 |
+| `mail.unread-status` | mailUnreadStatusInput → mailUnreadStatusOutput | 按事件中的邮件 ID 复核当前未读状态；只查本地。已读、未知或不带 ID 的旧事件不弹提醒 |
 | `mail.image-domains` / `mail.images` | mailGetInput/imagesInput → imageDomainsOutput/mailMessage | 打开邮件后自动加载远程图片 |
+| `media.image` | mediaImageInput → mediaImageOutput | 服务端代取公网 favicon/配图；移动端不直连外链 |
 | `mail.attachment` | mailAttachmentInput → mailAttachmentOutput | base64 附件下载 |
 | `mail.reply` | mailReplyInput → mailReplyOutput | 通过当前账号 SMTP 回复邮件 |
+| `mail.draft.list` / `.get` | mailDraftListInput → mailDraftList / mailDraftInput → mailDraft | 列表不返回正文；详情含正文、可选格式和附件元数据，不返回附件字节 |
+| `mail.draft.upload-start` / `.upload-chunk` | mailDraftUploadStartInput → mailDraftUploadStartOutput / mailDraftUploadChunkInput → mailDraftUploadChunkOutput | 暂存附件或草稿快照，上传 ID、base36 已接收偏移、base64url 数据以 `!` 分隔；按身份隔离，15 分钟无活动失效 |
+| `mail.draft.commit` / `.upload-drop` | mailDraftUploadRef → mailDraft / mailDraftUploadRef → mailDraftDeleteOutput | 完整快照按 `mailDraftSaveInput` 校验并保存，失败可丢弃未提交暂存 |
+| `mail.draft.save` / `.delete` | mailDraftSaveInput → mailDraft / mailDraftInput → mailDraftDeleteOutput | 正文和附件清单原子保存；附件字段省略时保留原清单，空数组清除。删除草稿同时删除附件 |
+| `mail.send` | mailDraftInput → mailReplyOutput | 单个收件地址、非空主题，正文或附件至少一个；Markdown 生成 HTML 与纯文本备选，附件通过 MIME 发送。SMTP 接受后删除草稿，不自动重试 |
+| `mail.delete` | mailDeleteInput → mailDeleteOutput | 按当前身份的账号和邮件 ID 移入服务器垃圾箱。优先 IMAP MOVE；也支持先复制到垃圾箱，再通过 UIDPLUS 仅移除原邮件。不支持安全移动时失败，不执行全邮箱 EXPUNGE |
 | `mail.mark-read` | markReadInput → markReadOutput | 单封已读标记；可选回写 IMAP `\Seen` |
 | `mail.mark-all-read` | markAllReadInput → markAllReadOutput | 按账号批量标为已读；可选回写 IMAP `\Seen` |
 | `mail.bilingual` | bilingualInput → bilingualBody | 整封正文翻译；仅超长正文分批 |
 
 ## 变更约定
+
+`0.1.3`：
+
+- `mail.delete` 成功后移除本机列表与正文、已读和派生缓存，保留用于去重的历史已见 ID，无需迁移；
+  `mail.deleted` 通知已打开视图刷新。删除不取决于服务器已读回写设置，且不自动重试。
+- `mail.arrived` 增加可选 `messageIds`：只列出合并落库后仍为未读的新邮件；阈值内按 ID 去重，
+  已读或并发被标为已读的邮件不再触发提示。
+- `mailSyncState` 增加可选 `knownCount`：记录上次同步后的已见索引条数。`initialized=true`
+  但当前账号索引为 0 且 `knownCount>0` 时按基线同步处理，修复旧邮件被重新当成新邮件。
+- 新增 `media.image`：订阅源 favicon 与邮箱服务商图标改由服务端代取并回传 `data:` URL，
+  避免移动端 WebView 拦截插件 iframe 的外链图片；失败时客户端保留字母或本地 SVG 回退。
+- `settingsSaveInput` / `settingsGetOutput` / `preferencesModel` 增加 `mailBodyZoom`：
+  邮件正文缩放百分比，范围 20–200，缺省 100；切换邮件或重启后沿用上次值。
+- `mail.account.rename` 只写本地账号记录，不重测连接、不改凭据；别名最多 6 个字符。
+- `rss.feed.rename` 只写本地 `custom_title`；后续刷新不会覆盖用户自定义名称，
+  文章列表、详情、简报与 OPML 导出均使用该名称。
 
 0.12.8 变更：
 

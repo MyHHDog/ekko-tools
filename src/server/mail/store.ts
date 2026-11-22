@@ -2,7 +2,11 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Account, MailSummary } from '../../shared/types';
+import type { MailDraft, MailDraftAttachment, MailDraftSummary } from '../../shared/mail';
+import {maxDraftAttachmentBytes} from '../../shared/mail';
 import type { Storage } from '../adapter/host';
+import { validateStored } from '../contract';
+import { assert } from '../../shared/error-codes';
 
 type Row = Record<string, any>;
 export interface StoredSyncState {
@@ -12,6 +16,7 @@ export interface StoredSyncState {
   lastError?: unknown;
   oldestCursor?: string;
   exhausted?: boolean;
+  knownCount?: number;
 }
 type BodyIndex = Record<string, { at: number; bytes: number }>;
 
@@ -51,7 +56,12 @@ export class MailStorage implements Storage {
         message_id TEXT NOT NULL,bytes INTEGER NOT NULL,at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS bilingual(key TEXT PRIMARY KEY,payload TEXT NOT NULL,at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS images(key TEXT PRIMARY KEY,payload TEXT NOT NULL,at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS drafts(id TEXT PRIMARY KEY,accountId TEXT NOT NULL,"to" TEXT NOT NULL,
+        subject TEXT NOT NULL,body TEXT NOT NULL,updatedAt INTEGER NOT NULL,format TEXT);
+      CREATE TABLE IF NOT EXISTS draft_attachments(draft_id TEXT NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+        id TEXT NOT NULL,name TEXT NOT NULL,content BLOB NOT NULL,PRIMARY KEY(draft_id,id));
       CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY,payload TEXT NOT NULL);`);
+    if(!db.prepare('PRAGMA table_info(drafts)').all().some(column=>column.name==='format'))db.exec('ALTER TABLE drafts ADD COLUMN format TEXT');
     this.db = db;
     return db;
   }
@@ -66,6 +76,48 @@ export class MailStorage implements Storage {
   }
   imported() { return this.meta('legacy_imported')?.value === '1'; }
   markImported() { this.setMeta('legacy_imported', '1'); }
+
+  listDrafts(): MailDraftSummary[] {
+    return this.open().prepare('SELECT id,accountId,"to",subject,updatedAt FROM drafts ORDER BY updatedAt DESC,id DESC').all()
+      .map(row => ({...row}) as unknown as MailDraftSummary);
+  }
+  getDraft(id: string): MailDraft | undefined {
+    const row = this.open().prepare('SELECT * FROM drafts WHERE id=?').get(id);
+    if (!row) return undefined;
+    const {format,...fields}=row;
+    const attachments=this.open().prepare('SELECT id,name,length(content) AS bytes FROM draft_attachments WHERE draft_id=? ORDER BY rowid').all(id);
+    const draft={...fields,...(format===null?{}:{format}),...(attachments.length?{attachments}:{})} as unknown as MailDraft;
+    validateStored('mail-draft', draft);
+    return draft;
+  }
+  draftAttachments(id:string){
+    return this.open().prepare('SELECT name AS filename,content FROM draft_attachments WHERE draft_id=? ORDER BY rowid').all(id)
+      .map(row=>({filename:String(row.filename),content:Buffer.from(row.content as Uint8Array)}));
+  }
+  saveDraft(draft: MailDraft, update: boolean, additions: (MailDraftAttachment&{content:Buffer})[] = []) {
+    validateStored('mail-draft', draft);
+    const db = this.open();
+    const {id,accountId,to,subject,body,updatedAt,format,attachments=[]} = draft;
+    db.exec('BEGIN IMMEDIATE');
+    try{
+      if(update)assert(db.prepare('UPDATE drafts SET accountId=?,"to"=?,subject=?,body=?,updatedAt=?,format=? WHERE id=?')
+        .run(accountId,to,subject,body,updatedAt,format??null,id).changes,'NOT_FOUND');
+      else assert(db.prepare('INSERT INTO drafts (id,accountId,"to",subject,body,updatedAt,format) SELECT ?,?,?,?,?,?,? WHERE (SELECT count(*) FROM drafts)<100')
+        .run(id,accountId,to,subject,body,updatedAt,format??null).changes);
+      const keep=new Set(attachments.map(file=>file.id));
+      const remove=db.prepare('DELETE FROM draft_attachments WHERE draft_id=? AND id=?');
+      for(const file of db.prepare('SELECT id FROM draft_attachments WHERE draft_id=?').all(id))if(!keep.has(String(file.id)))remove.run(id,file.id);
+      const occupied=Number(db.prepare('SELECT coalesce(sum(length(content)),0) AS bytes FROM draft_attachments').get()?.bytes);
+      assert(occupied+additions.reduce((sum,file)=>sum+file.bytes,0)<=maxDraftAttachmentBytes*10);
+      const insert=db.prepare('INSERT INTO draft_attachments (draft_id,id,name,content) VALUES (?,?,?,?)');
+      for(const file of additions)insert.run(id,file.id,file.name,file.content);
+      db.exec('COMMIT');
+    }catch(reason){db.exec('ROLLBACK');throw reason;}
+    return draft;
+  }
+  deleteDraft(id: string) {
+    return {deleted: !!this.open().prepare('DELETE FROM drafts WHERE id=?').run(id).changes};
+  }
 
   private mapAccount(row: Row): Account {
     return {
@@ -111,6 +163,17 @@ export class MailStorage implements Storage {
       ? 'SELECT * FROM messages WHERE account_id=? ORDER BY date ASC,message_id ASC'
       : 'SELECT * FROM messages ORDER BY date ASC,message_id ASC';
     return (accountId ? this.open().prepare(sql).all(accountId) : this.open().prepare(sql).all()) as Row[];
+  }
+  removeMessage(accountId: string, messageId: string) {
+    const db = this.open(), key = accountId + ':' + messageId;
+    db.exec('BEGIN');
+    try {
+      for (const table of ['messages','read_state','read_pending','translated_state','body_index'])
+        db.prepare(`DELETE FROM ${table} WHERE account_id=? AND message_id=?`).run(accountId, messageId);
+      db.prepare('DELETE FROM images WHERE key=?').run(key);
+      db.prepare('DELETE FROM bilingual WHERE substr(key,1,?)=?').run(key.length+1,key+':');
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
   private saveMessages(items: MailSummary[]) {
     const groups = new Map<string, MailSummary[]>();
@@ -163,6 +226,90 @@ export class MailStorage implements Storage {
       }
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
+  }
+  readFlag(accountId: string, messageId: string) {
+    const row = this.open().prepare('SELECT read FROM read_state WHERE account_id=? AND message_id=?')
+      .get(accountId, messageId) as Row | undefined;
+    return row ? row.read === 1 : undefined;
+  }
+  pendingRead(accountId: string, messageId: string) {
+    const row = this.open().prepare('SELECT read FROM read_pending WHERE account_id=? AND message_id=?')
+      .get(accountId, messageId) as Row | undefined;
+    return row ? row.read === 1 : undefined;
+  }
+  unreadMessageIds(accountId: string, messageIds: string[]) {
+    const unread = this.open().prepare(`SELECT 1 FROM messages
+      LEFT JOIN read_pending USING (account_id,message_id)
+      LEFT JOIN read_state USING (account_id,message_id)
+      WHERE messages.account_id=? AND messages.message_id=?
+        AND COALESCE(read_pending.read,read_state.read,1-messages.unread)=0`);
+    return [...new Set(messageIds)].filter(messageId => unread.get(accountId, messageId) !== undefined);
+  }
+  setReadFlag(accountId: string, messageId: string, read: boolean) {
+    this.open().prepare(`INSERT INTO read_state(account_id,message_id,read) VALUES(?,?,?)
+      ON CONFLICT(account_id,message_id) DO UPDATE SET read=excluded.read`).run(accountId, messageId, read ? 1 : 0);
+  }
+  setReadFlags(updates: { accountId: string; messageId: string; read: boolean }[]) {
+    const db = this.open(), statement = db.prepare(`INSERT INTO read_state(account_id,message_id,read) VALUES(?,?,?)
+      ON CONFLICT(account_id,message_id) DO UPDATE SET read=excluded.read`);
+    db.exec('BEGIN');
+    try {
+      for (const item of updates) statement.run(item.accountId, item.messageId, item.read ? 1 : 0);
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+  }
+  setPendingRead(accountId: string, messageId: string, read: boolean) {
+    this.open().prepare(`INSERT INTO read_pending(account_id,message_id,read) VALUES(?,?,?)
+      ON CONFLICT(account_id,message_id) DO UPDATE SET read=excluded.read`).run(accountId, messageId, read ? 1 : 0);
+  }
+  setPendingReads(updates: { accountId: string; messageId: string; read: boolean }[]) {
+    if (!updates.length) return;
+    const db = this.open(), statement = db.prepare(`INSERT INTO read_pending(account_id,message_id,read) VALUES(?,?,?)
+      ON CONFLICT(account_id,message_id) DO UPDATE SET read=excluded.read`);
+    db.exec('BEGIN');
+    try {
+      for (const item of updates) statement.run(item.accountId, item.messageId, item.read ? 1 : 0);
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+  }
+  deletePendingRead(accountId: string, messageId: string) {
+    this.open().prepare('DELETE FROM read_pending WHERE account_id=? AND message_id=?').run(accountId, messageId);
+  }
+  deletePendingReads(keys: string[]) {
+    const statement = this.open().prepare('DELETE FROM read_pending WHERE account_id=? AND message_id=?');
+    for (const key of keys) {
+      const at = key.indexOf(':');
+      if (at > 0) statement.run(key.slice(0, at), key.slice(at + 1));
+    }
+  }
+  markKnown(entries: { accountId: string; messageId: string; at: number }[], limit = 20000) {
+    if (!entries.length) return;
+    const db = this.open();
+    db.exec('BEGIN');
+    try {
+      const insert = db.prepare('INSERT OR IGNORE INTO known_messages(account_id,message_id,first_seen_at) VALUES(?,?,?)');
+      for (const item of entries) insert.run(item.accountId, item.messageId, item.at);
+      const count = Number((db.prepare('SELECT COUNT(*) n FROM known_messages').get() as Row).n);
+      if (count > limit) {
+        const remove = db.prepare('DELETE FROM known_messages WHERE rowid=?');
+        const rows = db.prepare('SELECT rowid FROM known_messages ORDER BY first_seen_at ASC,rowid ASC LIMIT ?')
+          .all(count - limit) as Row[];
+        for (const row of rows) remove.run(row.rowid);
+      }
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+  }
+  knownCount(accountId: string) {
+    return Number((this.open().prepare('SELECT COUNT(*) n FROM known_messages WHERE account_id=?')
+      .get(accountId) as Row).n);
+  }
+  saveSyncState(accountId: string, state: StoredSyncState) {
+    this.open().prepare(`INSERT INTO sync_state(account_id,payload,updated_at) VALUES(?,?,?)
+      ON CONFLICT(account_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at`)
+      .run(accountId, JSON.stringify(state), Date.now());
+  }
+  deleteSyncState(accountId: string) {
+    this.open().prepare('DELETE FROM sync_state WHERE account_id=?').run(accountId);
   }
 
   async get<T = any>(key: string): Promise<T | undefined> {

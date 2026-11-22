@@ -6,7 +6,9 @@ import type { RawMail } from './parse';
 import { normalize } from './parse';
 import { dangerous, filename } from './sanitize';
 import { validateAccount } from './presets';
-import { normalizeEndpoint } from '../../shared/mail';
+import { cleanDraftFilename, isMailboxAddress, maxDraftAttachmentBytes, normalizeEndpoint } from '../../shared/mail';
+import type { MailDraftSave } from '../../shared/mail';
+import {renderMailMarkdown} from '../../shared/mail-markdown';
 import type { Host, Run, Storage } from '../adapter/host';
 import type { Vault } from '../vault/store';
 import { AppError, assert, errorInfo } from '../../shared/error-codes';
@@ -16,6 +18,8 @@ import { needsTranslation } from '../translate/provider';
 import {remoteImages,image} from './images';
 import { MailBodyFiles } from './body-files';
 import { MailStorage } from './store';
+import {DraftUploads} from './draft-uploads';
+import { validateEvent } from '../contract';
 const clip=(value:string,size:number)=>Array.from(value.trim()).slice(0,size).join('');
 const escapeHtml=(value:string)=>value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]||char));
 const headerText=(value:string,size:number)=>value.replace(/[\r\n\u0000]/g,' ').trim().slice(0,size);
@@ -45,13 +49,21 @@ interface MailSyncState {
   lastError?: ErrorInfo;
   oldestCursor?: string;
   exhausted?: boolean;
+  knownCount?: number;
 }
 interface StoredBody{at:number;raw:RawMail}
+type OperationMode='foreground'|'background'|'silent';
 export class MailService {
   private raw=new Map<string,RawMail>();
   private rawBytes=0;
   private bilingualCache=new Map<string,BilingualBody>();
   private images=new Map<string,Record<string,string>>();
+  private backgroundFailures=new Map<string,number>();
+  private readRevisions=new Map<string,number>();
+  private pendingPulls=new Map<string,{count:number;removed:Set<string>}>();
+  private sendingDrafts=new Set<string>();
+  readonly draftUploads=new DraftUploads();
+  private mutation:Promise<unknown>=Promise.resolve();
   private bodies:MailBodyFiles;
   private store:MailStorage;
   private preferences:Storage;
@@ -62,7 +74,7 @@ export class MailService {
     host.lifecycle.add(()=>this.close());
   }
   bind(store:Storage){this.preferences=store;}
-  close(){this.store.close();}
+  close(){this.draftUploads.clear();this.store.close();}
   // 旧键值库只读一次：邮件主体与索引导入 SQLite，正文迁移到独立文件。
   async init(legacy:Storage){
     if(this.store.imported())return;
@@ -188,6 +200,18 @@ export class MailService {
   private async save(account:Account){const all=await this.accounts();await this.store.set('accounts',[...all.filter(a=>a.id!==account.id),account]);}
   // 摘要缓存是列表的唯一数据源：按日期升序保存，超出条数或字节预算时从最旧开始淘汰。
   private async loadCache(){return await this.store.get<MailSummary[]>('mail-cache')||[];}
+  // 网络请求保持并行，落库与通知判定统一串行，避免后台轮询覆盖前台已读状态。
+  private mutate<T>(work:()=>Promise<T>):Promise<T>{
+    const next=this.mutation.catch(()=>undefined).then(work);
+    this.mutation=next.then(()=>undefined,()=>undefined);
+    return next;
+  }
+  private async trackPull<T>(accountId:string,work:(removed:Set<string>)=>Promise<T>){
+    const pull=this.pendingPulls.get(accountId)||{count:0,removed:new Set<string>()};
+    this.pendingPulls.set(accountId,pull);pull.count++;
+    try{return await work(pull.removed);}
+    finally{if(--pull.count===0)this.pendingPulls.delete(accountId);}
+  }
   private async saveCache(cache:MailSummary[]){
     const kept=[...cache].sort((a,b)=>a.date-b.date||a.messageId.localeCompare(b.messageId));
     const sizes=kept.map(item=>Buffer.byteLength(JSON.stringify(item))+1);
@@ -196,25 +220,20 @@ export class MailService {
     const saved=start?kept.slice(start):kept;await this.store.set('mail-cache',saved);return saved;
   }
   private async loadSync(){return await this.store.get<Record<string,MailSyncState>>('mail-sync')||{};}
-  private async saveSync(value:Record<string,MailSyncState>){await this.store.set('mail-sync',value);}
   private async loadKnown(){return await this.store.get<Record<string,number>>('mail-known')||{};}
-  private async saveKnown(value:Record<string,number>){
-    const keys=Object.keys(value);
-    if(keys.length>20000){keys.sort((a,b)=>value[a]-value[b]);for(const key of keys.slice(0,keys.length-20000))delete value[key];}
-    await this.store.set('mail-known',value);
-  }
   private materialize(cache:MailSummary[],flags:Record<string,boolean>){
     for(const mail of cache){const key=mail.accountId+':'+mail.messageId;if(flags[key]!==undefined)mail.unread=!flags[key];}
     return cache;
   }
   private async readbackEnabled(){const preferences=await this.preferences.get<any>('preferences')||{};return preferences.syncReadReceipts===true;}
   private async pendingReads(){return await this.store.get<Record<string,boolean>>('read-pending')||{};}
-  private async setPendingReads(value:Record<string,boolean>){await this.store.set('read-pending',value);}
-  private async clearPending(keys:string[]){
-    if(!keys.length)return;
-    const pending=await this.pendingReads();let changed=false;
-    for(const key of keys)if(key in pending){delete pending[key];changed=true;}
-    if(changed)await this.setPendingReads(pending);
+  private advanceReadRevision(accountId:string){this.readRevisions.set(accountId,(this.readRevisions.get(accountId)||0)+1);}
+  private finishReadback(accountId:string,messageIds:string[],read:boolean){
+    return this.mutate(async()=>{
+      this.advanceReadRevision(accountId);
+      for(const messageId of messageIds)if(this.store.pendingRead(accountId,messageId)===read)
+        this.store.deletePendingRead(accountId,messageId);
+    });
   }
   private async persistBilingual(key:string,value:BilingualBody){
     this.cachePut(this.bilingualCache,key,structuredClone(value),20);
@@ -240,20 +259,37 @@ export class MailService {
     await this.store.set('images',saved);
   }
   private emit(run:Run,type:string,data:object){run.messages.emit(type,{eventId:randomUUID(),...data});}
-  private async operation<T>(account:Account,run:Run,fn:(connector:Connector,credentials:{account:Account;secret:string},signal:AbortSignal)=>Promise<T>,quiet=false,quick=false) {
-    if(!quiet){account.state={status:'connecting'};this.emit(run,'account.state',{accountId:account.id,state:account.state});}
+  private async operation<T>(account:Account,run:Run,fn:(connector:Connector,credentials:{account:Account;secret:string},signal:AbortSignal)=>Promise<T>,mode:OperationMode='foreground',quick=false) {
+    const silent=mode==='silent',background=mode==='background',previous=account.state.status;
+    if(!silent&&!background&&previous!=='connected'){account.state={status:'connecting'};this.emit(run,'account.state',{accountId:account.id,state:account.state});}
     try {
       const work=async(signal:AbortSignal)=>{
         const credentials={account,secret:await this.vault.get(account.id)};
         try{return await fn(this.real,credentials,signal);}finally{credentials.secret='';}
       };
       const value=quick?await bounded(work,run.signal,this.host.lifecycle,Math.min(this.timeoutMs,10000)):await retry(work,run.signal,this.host.lifecycle,this.timeoutMs);
-      if(!quiet){account.state={status:'connected',checkedAt:Date.now()};await this.save(account);}return value;
+      this.backgroundFailures.delete(account.id);
+      if(!silent){
+        account.state={status:'connected',checkedAt:Date.now()};await this.save(account);
+        if(previous!=='connected')this.emit(run,'account.state',{accountId:account.id,state:account.state});
+      }
+      return value;
     } catch(e){
       if(e&&typeof e==='object')(e as any).accountId=account.id;
-      if(!quiet){const error=errorInfo(e);account.state=error.code.startsWith('AUTH_')?{status:'auth_failed',error}:{status:'offline',error};await this.save(account);}
+      if(!silent){
+        const error=errorInfo(e),auth=error.code.startsWith('AUTH_');
+        const failures=background?(this.backgroundFailures.get(account.id)||0)+1:0;
+        if(background)this.backgroundFailures.set(account.id,failures);
+        // 后台轮询的偶发网络抖动不立即打断界面状态，连续三次失败才标记离线。
+        if(auth||!background||failures>=3){
+          const next=auth?{status:'auth_failed' as const,error}:{status:'offline' as const,error};
+          const changed=account.state.status!==next.status;
+          account.state=next;await this.save(account);
+          if(changed)this.emit(run,'account.state',{accountId:account.id,state:account.state});
+        }
+      }
       throw e;
-    } finally {if(!quiet)this.emit(run,'account.state',{accountId:account.id,state:account.state});}
+    }
   }
   async add(input:AddAccountInput,run:Run){
     const address=input.address.trim(),secret=input.provider==='gmail'?input.secret.replace(/\s/g,''):input.secret.trim();
@@ -273,11 +309,20 @@ export class MailService {
     }
     this.real.closeAccount?.(account.id);await this.vault.put(account.id,secret);
     input.secret='';await this.save(account);
-    await this.operation(account,run,(connector,c,s)=>connector.test(c,s),false,true);return account;
+    await this.operation(account,run,(connector,c,s)=>connector.test(c,s),'foreground',true);return account;
   }
   async test(id:string,run:Run) {
     const account=await this.account(id);
-    return this.operation(account,run,(connector,c,s)=>connector.test(c,s),false,true);
+    return this.operation(account,run,(connector,c,s)=>connector.test(c,s),'foreground',true);
+  }
+  // 只改本地展示名，不重测连接、不改凭据或连接状态。
+  async rename(id:string,alias:string) {
+    const account=await this.account(id);
+    const value=alias.trim();
+    assert(value&&Array.from(value).length<=6);
+    account.alias=value;
+    await this.save(account);
+    return account;
   }
   private async clearMessages(id:string){
     await this.bodyDeletePrefix(id+':');
@@ -286,41 +331,64 @@ export class MailService {
     for(const key of this.bilingualCache.keys())if(key.startsWith(id+':'))this.bilingualCache.delete(key);
     for(const key of this.images.keys())if(key.startsWith(id+':'))this.images.delete(key);
   }
-  private async clearAccountData(id:string){
-    await this.clearMessages(id);
-    const sync=await this.loadSync();delete sync[id];await this.saveSync(sync);
-  }
   async remove(id:string) {
     this.real.closeAccount?.(id);
     await this.account(id);await this.vault.delete(id);
     await this.store.set('accounts',(await this.accounts()).filter(a=>a.id!==id));
-    await this.clearAccountData(id);
+    await this.clearMessages(id);
+    this.readRevisions.delete(id);
     return {removed:true as const};
   }
-  // 合并一页服务器结果；通知只统计从未记录过的 messageId，首次同步与 UIDVALIDITY 重建不通知。
-  private async mergePage(account:Account,run:Run,page:{items:MailSummary[];nextCursor?:string;reset?:boolean},seen:Record<string,boolean>|undefined,notify:boolean){
+  async deleteMessage(id:string,messageId:string,run:Run){
+    const account=await this.account(id),key=this.bodyKey(id,messageId);
+    assert(this.real.moveToTrash,'MAIL_TRASH_UNAVAILABLE');
+    await this.operation(account,run,(connector,credentials,signal)=>connector.moveToTrash!(credentials,messageId,signal),'silent',true);
+    await this.mutate(async()=>{
+      this.pendingPulls.get(id)?.removed.add(messageId);
+      await this.bodies.delete(key);
+      this.store.removeMessage(id,messageId);
+      this.dropRaw(key);this.images.delete(key);
+      for(const item of this.bilingualCache.keys())if(item.startsWith(key+':'))this.bilingualCache.delete(item);
+    });
+    const event={eventId:randomUUID(),accountId:id,messageId};
+    validateEvent('mail.deleted',event);
+    run.messages.emit('mail.deleted',event,{audience:'plugin'});
+    return {deleted:true};
+  }
+  // 合并一页服务器结果；通知只统计从未记录过且最终仍为未读的 messageId，首次同步与 UIDVALIDITY 重建不通知。
+  private async mergePage(account:Account,run:Run,page:{items:MailSummary[];nextCursor?:string;reset?:boolean},seen:Record<string,boolean>|undefined,notify:boolean,readRevision:number|undefined,removed:Set<string>){
+    return this.mutate(()=>this.mergePageNow(account,run,{...page,items:page.items.filter(item=>!removed.has(item.messageId))},
+      seen&&Object.fromEntries(Object.entries(seen).filter(([id])=>!removed.has(id))),notify,this.readRevisions.get(account.id)===readRevision));
+  }
+  private async mergePageNow(account:Account,run:Run,page:{items:MailSummary[];nextCursor?:string;reset?:boolean},seen:Record<string,boolean>|undefined,notify:boolean,mergeServerFlags:boolean){
     if(page.reset)await this.clearMessages(account.id);
     const cache=await this.loadCache(),flags=await this.store.get<Record<string,boolean>>('read')||{};
     const pending=await this.pendingReads(),known=await this.loadKnown(),sync=await this.loadSync(),state=sync[account.id]||{};
     const prior=cache.filter(mail=>mail.accountId===account.id),priorIds=new Set(prior.map(mail=>mail.messageId));
-    const knownForAccount=Object.keys(known).some(key=>key.startsWith(account.id+':'));
-    const baseline=!!page.reset||!state.initialized||(!knownForAccount&&prior.length>0);
+    const knownThisAccount=Object.keys(known).filter(key=>key.startsWith(account.id+':')).length;
+    const indexMissing=state.knownCount!==undefined&&state.knownCount>0&&knownThisAccount===0;
+    const baseline=!!page.reset||!state.initialized||indexMissing||(!knownThisAccount&&prior.length>0);
     const fresh=page.items.filter(item=>!priorIds.has(item.messageId)&&!known[account.id+':'+item.messageId]);
     const serverSeen={...(seen||{})};for(const item of page.items)if(serverSeen[item.messageId]===undefined)serverSeen[item.messageId]=!item.unread;
-    const cleared:string[]=[];let flagsChanged=false;
-    if(await this.readbackEnabled())for(const [messageId,isSeen] of Object.entries(serverSeen)){
+    const cleared:string[]=[],readUpdates:{accountId:string;messageId:string;read:boolean}[]=[];
+    if(mergeServerFlags&&await this.readbackEnabled())for(const [messageId,isSeen] of Object.entries(serverSeen)){
       const key=account.id+':'+messageId;
       if(pending[key]!==undefined){if(pending[key]===isSeen)cleared.push(key);continue;}
-      if(flags[key]!==isSeen){flags[key]=isSeen;flagsChanged=true;}
+      if(flags[key]!==isSeen){flags[key]=isSeen;readUpdates.push({accountId:account.id,messageId,read:isSeen});}
     }
     const merged=[...cache.filter(mail=>mail.accountId!==account.id||!page.items.some(item=>item.messageId===mail.messageId)),...page.items];
     this.materialize(merged,flags);
-    for(const mail of merged)if(mail.accountId===account.id&&known[mail.accountId+':'+mail.messageId]===undefined)known[mail.accountId+':'+mail.messageId]=Date.now();
-    if(cleared.length){for(const key of cleared)delete pending[key];await this.setPendingReads(pending);}
-    if(flagsChanged)await this.store.set('read',flags);
-    const savedCache=await this.saveCache(merged),cacheKeys=new Set(savedCache.map(mail=>mail.accountId+':'+mail.messageId));
-    for(const key of Object.keys(known))if(!cacheKeys.has(key))delete known[key];
-    await this.saveKnown(known);
+    const knownEntries:{accountId:string;messageId:string;at:number}[]=[];
+    for(const mail of merged)if(mail.accountId===account.id&&known[mail.accountId+':'+mail.messageId]===undefined){
+      known[mail.accountId+':'+mail.messageId]=Date.now();
+      knownEntries.push({accountId:mail.accountId,messageId:mail.messageId,at:known[mail.accountId+':'+mail.messageId]});
+    }
+    if(cleared.length)await this.store.deletePendingReads(cleared);
+    if(readUpdates.length)await this.store.setReadFlags(readUpdates);
+    // 已见过的 messageId 不随缓存淘汰一起删除，否则旧邮件重新进入
+    // 最新一页时会被误判为“新邮件”并重复提醒。
+    await this.saveCache(merged);
+    if(knownEntries.length)await this.store.markKnown(knownEntries);
     const next=sync[account.id]||{};next.initialized=true;next.lastSyncAt=Date.now();delete next.lastError;delete next.lastErrorAt;
     if(page.nextCursor){
       next.oldestCursor=page.nextCursor;
@@ -329,19 +397,30 @@ export class MailService {
       delete next.oldestCursor;
       next.exhausted=true;
     }
-    sync[account.id]=next;await this.saveSync(sync);
-    if(notify&&!baseline&&fresh.length)this.emit(run,'mail.arrived',{accountId:account.id,count:fresh.length});
+    next.knownCount=await this.store.knownCount(account.id);
+    await this.store.saveSyncState(account.id,next);
+    if(notify&&!baseline){
+      const messageIds:string[]=[];
+      for(const item of fresh){
+        const pendingRead=await this.store.pendingRead(account.id,item.messageId);
+        const read=pendingRead!==undefined?pendingRead:await this.store.readFlag(account.id,item.messageId);
+        if(read===undefined?item.unread:!read)messageIds.push(item.messageId);
+      }
+      if(messageIds.length)
+      this.emit(run,'mail.arrived',{accountId:account.id,count:messageIds.length,messageIds});
+    }
     return baseline?0:fresh.length;
   }
-  private async pullNewest(account:Account,run:Run,limit:number,notify:boolean){
+  private async pullNewest(account:Account,run:Run,limit:number,notify:boolean,mode:OperationMode,removed:Set<string>){
     const prior=(await this.loadCache()).filter(mail=>mail.accountId===account.id),readback=await this.readbackEnabled();
+    const readRevision=this.readRevisions.get(account.id);
     const {page,seen}=await this.operation(account,run,async(connector,c,s)=>{
       const page=await connector.list(c,{limit},s);
       let seen:Record<string,boolean>|undefined;
       if(readback&&connector.seen&&prior.length)try{seen=await connector.seen(c,prior.slice(-500).map(mail=>mail.messageId),s);}catch{/* flags 读取失败时保留本地状态，下次同步校正。 */}
       return {page,seen};
-    });
-    return await this.mergePage(account,run,page,seen,notify);
+    },mode);
+    return await this.mergePage(account,run,page,seen,notify,readRevision,removed);
   }
   private async oldestCachedMessageIds(accountId:string,limit:number){
     const cache=await this.loadCache();
@@ -349,25 +428,30 @@ export class MailService {
       .sort((a,b)=>a.date-b.date||a.messageId.localeCompare(b.messageId))
       .slice(0,Math.max(limit,20)).map(mail=>mail.messageId);
   }
-  private async pullOlder(account:Account,run:Run,state:MailSyncState,limit:number){
+  private async pullOlder(account:Account,run:Run,state:MailSyncState,limit:number,mode:OperationMode,removed:Set<string>){
     const cachedMessageIds=state.oldestCursor?[]:await this.oldestCachedMessageIds(account.id,limit);
+    const readRevision=this.readRevisions.get(account.id);
     const page=await this.operation(account,run,async(connector,c,s)=>{
       let cursor=state.oldestCursor;
       if(!cursor&&connector.olderCursor)cursor=await connector.olderCursor(c,cachedMessageIds,s);
       if(!cursor)return undefined;
       return connector.list(c,{limit,cursor},s);
-    });
+    },mode);
     if(!page){
-      const sync=await this.loadSync();
-      sync[account.id]={...(sync[account.id]||state),initialized:true,exhausted:true};
-      await this.saveSync(sync);
+      await this.mutate(async()=>{
+        const sync=await this.loadSync();
+        await this.store.saveSyncState(account.id,{...(sync[account.id]||state),initialized:true,exhausted:true});
+      });
       return false;
     }
-    if(page.reset){await this.pullNewest(account,run,limit,false);return true;}
-    await this.mergePage(account,run,page,undefined,false);
+    if(page.reset){await this.pullNewest(account,run,limit,false,mode,removed);return true;}
+    await this.mergePage(account,run,page,undefined,false,readRevision,removed);
     return true;
   }
-  async list(input:any,run:Run){
+  unreadStatus(accountId:string,messageIds:string[]){
+    return {messageIds:this.store.unreadMessageIds(accountId,messageIds)};
+  }
+  async list(input:any,run:Run,mode:OperationMode='foreground'){
     const accounts=(await this.accounts()).filter(a=>!input.accountIds?.length||input.accountIds.includes(a.id));
     const limit=Number(input.limit||20),offset=Number(input.cursor||0),refresh=input.refresh===true;
     assert(Number.isInteger(limit)&&limit>0&&limit<=100&&Number.isInteger(offset)&&offset>=0);
@@ -375,8 +459,14 @@ export class MailService {
     // 默认只读本地缓存；refresh=true、首次使用或缓存为空时才访问 IMAP。
     for(const account of accounts){
       if(!refresh&&sync[account.id]?.initialized)continue;
-      try{await this.pullNewest(account,run,Math.max(limit,50),refresh);updated++;}
-      catch(e){const error=errorInfo(e);partial.push({...error,accountId:account.id});sync=await this.loadSync();sync[account.id]={...(sync[account.id]||{}),lastError:error,lastErrorAt:Date.now()};await this.saveSync(sync);}
+      try{await this.trackPull(account.id,removed=>this.pullNewest(account,run,Math.max(limit,50),refresh,mode,removed));updated++;}
+      catch(e){
+        const error=errorInfo(e);partial.push({...error,accountId:account.id});
+        await this.mutate(async()=>{
+          const latest=await this.loadSync();
+          await this.store.saveSyncState(account.id,{...(latest[account.id]||{}),lastError:error,lastErrorAt:Date.now()});
+        });
+      }
     }
     let cache=await this.loadCache();sync=await this.loadSync();
     const visible=()=>cache.filter(mail=>accounts.some(account=>account.id===mail.accountId));
@@ -386,7 +476,7 @@ export class MailService {
         const state=sync[account.id];
         if(!state||state.exhausted===true)continue;
         if(!state.oldestCursor&&!this.real.olderCursor)continue;
-        try{if(await this.pullOlder(account,run,state,50))updated++;}catch(e){partial.push({...errorInfo(e),accountId:account.id});}
+        try{if(await this.trackPull(account.id,removed=>this.pullOlder(account,run,state,50,mode,removed)))updated++;}catch(e){partial.push({...errorInfo(e),accountId:account.id});}
       }
       cache=await this.loadCache();sync=await this.loadSync();
     }
@@ -417,21 +507,20 @@ export class MailService {
     return {account,raw};
   }
   private async upsertSummary(mail:MailMessage){
-    const cache=await this.loadCache(),key=mail.accountId+':'+mail.messageId;
-    const summary:MailSummary={accountId:mail.accountId,messageId:mail.messageId,from:mail.from,subject:mail.subject,
-      snippet:mail.snippet,date:mail.date,unread:mail.unread,hasAttachments:mail.hasAttachments,lang:mail.lang,translated:mail.translated};
-    const next=[...cache.filter(mail=>mail.accountId!==summary.accountId||mail.messageId!==summary.messageId),summary];
-    const saved=await this.saveCache(next);
-    const known=await this.loadKnown(),cacheKeys=new Set(saved.map(mail=>mail.accountId+':'+mail.messageId));
-    for(const existing of Object.keys(known))if(!cacheKeys.has(existing))delete known[existing];
-    if(known[key]===undefined)known[key]=Date.now();
-    await this.saveKnown(known);
+    await this.mutate(async()=>{
+      const cache=await this.loadCache();
+      const summary:MailSummary={accountId:mail.accountId,messageId:mail.messageId,from:mail.from,subject:mail.subject,
+        snippet:mail.snippet,date:mail.date,unread:mail.unread,hasAttachments:mail.hasAttachments,lang:mail.lang,translated:mail.translated};
+      const next=[...cache.filter(mail=>mail.accountId!==summary.accountId||mail.messageId!==summary.messageId),summary];
+      await this.saveCache(next);
+      await this.store.markKnown([{accountId:summary.accountId,messageId:summary.messageId,at:Date.now()}]);
+    });
   }
   async get(id:string,messageId:string,run:Run):Promise<MailMessage>{
     const {account,raw}=await this.getRaw(id,messageId,run);
-    const mail=normalize(raw,account,this.maxBytes,await this.imagesFor(id+':'+messageId)),key=id+':'+messageId;
-    const flags=await this.store.get<Record<string,boolean>>('read')||{},pending=await this.pendingReads();
-    const read=pending[key]!==undefined?pending[key]:flags[key];
+    const mail=normalize(raw,account,this.maxBytes,await this.imagesFor(id+':'+messageId));
+    const pending=await this.store.pendingRead(id,messageId);
+    const read=pending!==undefined?pending:await this.store.readFlag(id,messageId);
     if(read!==undefined)mail.unread=!read;
     raw.unread=mail.unread;await this.upsertSummary(mail);
     return mail;
@@ -478,52 +567,108 @@ export class MailService {
   }
   async markRead(id:string,messageId:string,read:boolean,run:Run) {
     const account=await this.account(id);assert(typeof read==='boolean');
-    const key=id+':'+messageId,flags=await this.store.get<Record<string,boolean>>('read')||{};flags[key]=read;
-    await this.store.set('read',flags);
-    const cache=await this.loadCache(),summary=cache.find(mail=>mail.accountId===id&&mail.messageId===messageId);
-    if(summary){summary.unread=!read;await this.saveCache(cache);}
-    const raw=this.raw.get(key);if(raw)raw.unread=!read;
+    const key=id+':'+messageId,readback=await this.readbackEnabled();
+    await this.mutate(async()=>{
+      this.advanceReadRevision(id);
+      await this.store.setReadFlag(id,messageId,read);
+      // 先登记待回写覆盖，避免后台同步在 IMAP 写入完成前用旧服务器状态覆盖本机已读。
+      if(readback)await this.store.setPendingRead(id,messageId,read);
+      const cache=await this.loadCache(),summary=cache.find(mail=>mail.accountId===id&&mail.messageId===messageId);
+      if(summary){summary.unread=!read;await this.saveCache(cache);}
+      const raw=this.raw.get(key);if(raw)raw.unread=!read;
+    });
     this.emit(run,'mail.read',{accountId:id,messageId,read});
     let synced:boolean|undefined;
-    if(await this.readbackEnabled()){
-      let failed=true;
-      if(this.real.markRead)try{await this.operation(account,run,(connector,c,s)=>connector.markRead!(c,messageId,read,s),true);synced=true;failed=false;}catch{}
-      if(failed){synced=false;const pending=await this.pendingReads();pending[key]=read;await this.setPendingReads(pending);}
-      else await this.clearPending([key]);
+    if(readback){
+      synced=false;
+      if(this.real.markRead)try{
+        await this.operation(account,run,(connector,c,s)=>connector.markRead!(c,messageId,read,s),'silent');
+        await this.finishReadback(id,[messageId],read);synced=true;
+      }catch{/* 保留 read_pending，下次同步继续以本机状态为准。 */}
     }
     return synced===undefined?{ok:true}:{ok:true,synced};
   }
   async markAllRead(accountIds:string[]|undefined,run:Run) {
     const ids=Array.isArray(accountIds)&&accountIds.length?new Set(accountIds):undefined;
-    const cache=await this.store.get<MailSummary[]>('mail-cache')||[],flags=await this.store.get<Record<string,boolean>>('read')||{};
-    let updated=0;const pending:Record<string,string[]>={};
-    for(const mail of cache){
-      if(ids&&!ids.has(mail.accountId))continue;
-      const key=mail.accountId+':'+mail.messageId,unread=flags[key]===undefined?mail.unread:!flags[key];
-      if(!unread)continue;
-      flags[key]=true;updated++;(pending[mail.accountId]||(pending[mail.accountId]=[])).push(mail.messageId);
-      mail.unread=false;
-      const raw=this.raw.get(key);if(raw)raw.unread=false;
-    }
-    if(updated){await this.store.set('read',flags);await this.saveCache(cache);}
+    let updated=0;const pending:Record<string,string[]>={},readback=await this.readbackEnabled();
+    await this.mutate(async()=>{
+      const cache=await this.store.get<MailSummary[]>('mail-cache')||[],flags=await this.store.get<Record<string,boolean>>('read')||{};
+      const updates:{accountId:string;messageId:string;read:boolean}[]=[];
+      for(const mail of cache){
+        if(ids&&!ids.has(mail.accountId))continue;
+        const key=mail.accountId+':'+mail.messageId,unread=flags[key]===undefined?mail.unread:!flags[key];
+        if(!unread)continue;
+        flags[key]=true;updated++;(pending[mail.accountId]||(pending[mail.accountId]=[])).push(mail.messageId);
+        updates.push({accountId:mail.accountId,messageId:mail.messageId,read:true});
+        mail.unread=false;
+        const raw=this.raw.get(key);if(raw)raw.unread=false;
+      }
+      if(updates.length){
+        for(const accountId of Object.keys(pending))this.advanceReadRevision(accountId);
+        await this.store.setReadFlags(updates);
+        if(readback)await this.store.setPendingReads(updates);
+        await this.saveCache(cache);
+      }
+    });
     let synced:boolean|undefined;
-    if(await this.readbackEnabled()){
-      synced=true;const accounts=await this.accounts(),pendingFlags=await this.pendingReads();let pendingChanged=false;
+    if(readback){
+      synced=true;const accounts=await this.accounts();
       for(const [accountId,messageIds] of Object.entries(pending)){
         const account=accounts.find(item=>item.id===accountId);
-        if(!account||!this.real.markReadMany){
-          synced=false;for(const messageId of messageIds){pendingFlags[accountId+':'+messageId]=true;pendingChanged=true;}continue;
-        }
+        if(!account||!this.real.markReadMany){synced=false;continue;}
         try{
-          await this.operation(account,run,(connector,c,s)=>connector.markReadMany!(c,messageIds,true,s),true);
-          for(const messageId of messageIds)if(accountId+':'+messageId in pendingFlags){delete pendingFlags[accountId+':'+messageId];pendingChanged=true;}
-        }catch{
-          synced=false;for(const messageId of messageIds){pendingFlags[accountId+':'+messageId]=true;pendingChanged=true;}
-        }
+          await this.operation(account,run,(connector,c,s)=>connector.markReadMany!(c,messageIds,true,s),'silent');
+          await this.finishReadback(accountId,messageIds,true);
+        }catch{synced=false;}
       }
-      if(pendingChanged)await this.setPendingReads(pendingFlags);
     }
     return synced===undefined?{updated}:{updated,synced};
+  }
+  listDrafts(){return this.store.listDrafts();}
+  getDraft(id:string){
+    const draft=this.store.getDraft(id);assert(draft,'NOT_FOUND');return draft;
+  }
+  saveDraft({id,accountId,to,subject,body,format,attachments}:MailDraftSave){
+    if(id)assert(!this.sendingDrafts.has(id),'TIMEOUT');
+    const existing=id?this.getDraft(id):undefined;
+    const previous=existing?.attachments??[], additions:({id:string;name:string;bytes:number;content:Buffer})[]=[];
+    const selected=attachments===undefined?previous:attachments.map(file=>{
+      const saved=previous.find(item=>item.id===file.id);
+      if(saved)return saved;
+      const name=cleanDraftFilename(file.name);
+      assert(name&&name===file.name&&!dangerous(name,''));
+      const content=this.draftUploads.complete(file.id,'attachment'),meta={id:file.id,name,bytes:content.length};
+      additions.push({...meta,content});return meta;
+    });
+    assert(new Set(selected.map(file=>file.id)).size===selected.length);
+    assert(selected.reduce((sum,file)=>sum+file.bytes,0)<=maxDraftAttachmentBytes);
+    const mode=format??existing?.format;
+    const saved=this.store.saveDraft({id:id??randomUUID(),accountId,to,subject,body,updatedAt:Date.now(),
+      ...(mode?{format:mode}:{}),...(selected.length?{attachments:selected}:{})},!!id,additions);
+    for(const file of additions)this.draftUploads.drop(file.id);
+    return saved;
+  }
+  deleteDraft(id:string){
+    assert(!this.sendingDrafts.has(id),'TIMEOUT');return this.store.deleteDraft(id);
+  }
+  async sendDraft(id:string,run:Run){
+    assert(!this.sendingDrafts.has(id),'TIMEOUT');
+    const draft=this.getDraft(id),to=draft.to.trim(),subject=draft.subject.trim(),text=draft.body;
+    assert(isMailboxAddress(to)&&subject&&!/[\x00-\x1f\x7f]/.test(draft.subject)&&(text.trim()||draft.attachments?.length));
+    const account=await this.account(draft.accountId),send=this.real.reply?.bind(this.real);assert(send,'INTERNAL');
+    return bounded(async signal=>{
+      assert(!signal.aborted,'TIMEOUT');
+      this.sendingDrafts.add(id);
+      try{
+        const secret=await this.vault.get(account.id);
+        assert(!signal.aborted,'TIMEOUT');
+        const attachments=draft.attachments?.length?this.store.draftAttachments(id):undefined;
+        const html=draft.format==='markdown'&&text.trim()?renderMailMarkdown(text):undefined;
+        const sent=await send({account,secret},{to,subject,text,...(html?{html}:{}),...(attachments?{attachments}:{})},signal);
+        this.store.deleteDraft(id);
+        return {sent:true,...(sent.messageId?{messageId:headerText(sent.messageId,900)}:{})};
+      }finally{this.sendingDrafts.delete(id);}
+    },run.signal,this.host.lifecycle,draft.attachments?.length?this.timeoutMs:Math.min(this.timeoutMs,10000));
   }
   async reply(id:string,messageId:string,body:string,run:Run) {
     const account=await this.account(id),text=body.trim();
@@ -539,7 +684,7 @@ export class MailService {
     const inReplyTo=raw.rfcMessageId?headerText(raw.rfcMessageId,900):undefined;
     const references=[...(raw.references||[]),...(inReplyTo?[inReplyTo]:[])]
       .map(item=>headerText(item,900)).filter(Boolean).slice(-20);
-    const sent=await this.operation(account,run,(connector,c,s)=>send(c,{to,subject,text:text+quote,html,inReplyTo,references},s),false,true);
+    const sent=await this.operation(account,run,(connector,c,s)=>send(c,{to,subject,text:text+quote,html,inReplyTo,references},s),'silent',true);
     return {sent:true,...(sent.messageId?{messageId:headerText(sent.messageId,900)}:{})};
   }
   async bilingual(input:any,run:Run) {

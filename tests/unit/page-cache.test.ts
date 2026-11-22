@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
 import { appearanceDefaults } from '../../src/client/appearance';
-import { readAppearanceCache, readViewCache, writeAppearanceCache, writeViewCache } from '../../src/client/bootstrap-cache';
+import { readAppearanceCache, readBackgroundCache, readViewCache, writeAppearanceCache, writeViewCache } from '../../src/client/bootstrap-cache';
 
 function host(profile = 'default') {
   return { plugin: { id: 'ekko-tools' }, identity: { userId: 7, profile } } as any;
@@ -22,5 +22,15 @@ describe('页面缓存', () => {
     writeViewCache(host(), 'mail', { filter: '', page: { items: [], total: 0 } });
     expect(readViewCache(host(), 'mail')).toEqual({ filter: '', page: { items: [], total: 0 } });
     expect(readAppearanceCache(host())).toEqual(appearanceDefaults);
+  });
+
+  it('背景只在同一脚本会话内复用，页面重载后不复用失效 blob URL', () => {
+    const backgrounds = { desktop: 'blob:desktop', mobile: 'blob:mobile' };
+    writeAppearanceCache(host(), appearanceDefaults, backgrounds);
+    expect(readBackgroundCache(host())).toEqual(backgrounds);
+    const page = JSON.parse(window.name.slice('ekko-tools:page-cache:'.length));
+    page.backgroundSession = 'stale-session';
+    window.name = 'ekko-tools:page-cache:' + JSON.stringify(page);
+    expect(readBackgroundCache(host())).toBeUndefined();
   });
 });

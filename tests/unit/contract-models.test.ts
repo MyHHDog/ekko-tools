@@ -21,6 +21,19 @@ it('契约：未知模型名与违反模型的输入被拒绝',()=>{
   expect(()=>validateModel(contract,'markAllReadInput',{})).not.toThrow();
   expect(()=>validateModel(contract,'settingsSaveInput',{notifications:{enabled:true,dndEnabled:false,dndStart:'22:00',dndEnd:'08:00',mutedAccountIds:[]}})).not.toThrow();
   expect(()=>validateModel(contract,'settingsSaveInput',{notifications:{enabled:true}})).toThrow(/missing/);
+  expect(()=>validateModel(contract,'settingsSaveInput',{mailBodyZoom:130})).not.toThrow();
+  expect(()=>validateModel(contract,'settingsSaveInput',{mailBodyZoom:10})).toThrow(/outside range/);
+  expect(()=>validateModel(contract,'mailAccountRenameInput',{accountId:'a',alias:'新别名'})).not.toThrow();
+  expect(()=>validateModel(contract,'mailAccountRenameInput',{accountId:'a'})).toThrow(/missing alias/);
+  expect(()=>validateModel(contract,'rssFeedRenameInput',{id:'f',title:'新名称'})).not.toThrow();
+  expect(()=>validateModel(contract,'rssFeedRenameInput',{id:'f',title:''})).toThrow(/invalid length/);
+  expect(()=>validateModel(contract,'mediaImageInput',{url:'https://example.com/favicon.ico'})).not.toThrow();
+  expect(()=>validateModel(contract,'mediaImageInput',{url:''})).toThrow(/invalid length/);
+  expect(()=>validateModel(contract,'mediaImageInput',{url:'https://example.com/a.png',evil:1})).toThrow(/unknown property/);
+  expect(()=>validateModel(contract,'mailArrivedEvent',{eventId:'e',accountId:'a',count:1,messageIds:['m']})).not.toThrow();
+  expect(()=>validateModel(contract,'mailArrivedEvent',{eventId:'e',accountId:'a',count:1})).not.toThrow();
+  expect(()=>validateModel(contract,'mailArrivedEvent',{eventId:'e',accountId:'a',count:1,
+    messageIds:Array.from({length:101},(_,index)=>'m'+index)})).toThrow(/too many items/);
 });
 
 it('契约：真实业务输出全部通过对应输出模型',async()=>{
@@ -41,6 +54,8 @@ it('契约：真实业务输出全部通过对应输出模型',async()=>{
       smtp:{host:'mail.self.example',port:587,secure:false},
     });
     expect(()=>validateModel(contract,'bootstrapOutput',booted)).not.toThrow();
+    const renamed=await unwrap(h,'mail.account.rename',{accountId:custom.id,alias:'自建邮箱'});
+    expect(()=>validateModel(contract,'account',renamed)).not.toThrow();
     const page=await unwrap(h,'mail.list',{limit:5});
     expect(()=>validateModel(contract,'mailPage',page)).not.toThrow();
     const first=page.items[0];

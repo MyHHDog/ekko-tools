@@ -1,4 +1,5 @@
 import sanitize from 'sanitize-html';
+import {blockedAttachmentExtension} from '../../shared/mail';
 export const BODY_LIMIT=512*1024;
 export const tags='a b i u em strong p br hr div span blockquote pre code ul ol li table thead tbody tr td th colgroup col caption img h1 h2 h3 h4 h5 h6 sub sup center font'.split(' ');
 const length=/^-?\d+(\.\d+)?(px|pt|em|rem|%|vw|vh)?$/;
@@ -65,6 +66,6 @@ export function plainText(html:string) {
 }
 export function filename(value:string) {return value.replace(/[/\\:\u0000-\u001f\u007f]/g,'_').replace(/^\.+/,'_').slice(0,180)||'attachment';}
 export function dangerous(name:string,mime:string) {
-  return /\.(exe|com|bat|cmd|ps1|msi|scr|js|vbs|lnk|html?|svg|reg|jar|app|sh|hta)$/i.test(name)||
+  return blockedAttachmentExtension(name)||
     /x-msdownload|javascript|text\/html|image\/svg|x-sh|x-executable/i.test(mime);
 }

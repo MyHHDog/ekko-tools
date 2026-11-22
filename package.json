@@ -1,6 +1,6 @@
 {
   "name": "ekko-tools",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "private": true,
   "description": "Ekko Studio 可扩展工具插件：翻译、多账号统一收发件箱与 RSS 阅读",

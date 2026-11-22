@@ -3,14 +3,23 @@ export function validateRpc(name:string,input:any) {
   assert(input===undefined||(input&&typeof input==='object'&&!Array.isArray(input)));
   if(!input)return;
   for(const key of ['__requestId','__owner'])assert(input[key]===undefined||(typeof input[key]==='string'&&input[key].length<=200));
+  if(name.startsWith('mail.draft.')||name==='mail.send'){
+    assert(input.id===undefined||/^[\w-]{1,200}$/.test(input.id));
+    assert(input.accountId===undefined||/^[\w:-]{0,200}$/.test(input.accountId));
+    return;
+  }
   if(name.startsWith('mail.')&&!['mail.account.add','mail.list','mail.mark-all-read'].includes(name)){
     assert(typeof input.accountId==='string'&&/^[\w:-]{1,200}$/.test(input.accountId));
-    if(!['mail.account.test','mail.account.remove'].includes(name))assert(typeof input.messageId==='string'&&/^[\w:-]{1,200}$/.test(input.messageId));
+    if(!['mail.account.test','mail.account.remove','mail.account.rename','mail.unread-status'].includes(name))assert(typeof input.messageId==='string'&&/^[\w:-]{1,200}$/.test(input.messageId));
   }
   if(name==='mail.account.add'){
     assert(['163','qq','gmail','custom'].includes(input.provider));
     assert(typeof input.address==='string'&&typeof input.secret==='string');
     assert(input.alias===undefined||(typeof input.alias==='string'&&Array.from(input.alias).length<=6));
+  }
+  if(name==='mail.account.rename'){
+    const value=typeof input.alias==='string'?input.alias.trim():'';
+    assert(value.length>0&&Array.from(value).length<=6);
   }
   if(name==='mail.list'){
     assert(input.cursor===undefined||(typeof input.cursor==='string'&&/^\d{1,10}$/.test(input.cursor)));

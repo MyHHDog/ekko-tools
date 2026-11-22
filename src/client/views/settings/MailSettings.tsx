@@ -4,6 +4,7 @@ import type {Bootstrap} from '../../../shared/rpc-contract';
 import {call,readable} from '../../rpc-client';
 import {Source,connectionLabels} from '../../components/AccountChip';
 import {Icon,State} from '../../components/States';
+import {Select} from '../../components/Select';
 import {t} from '../../i18n';
 import {endpointSecure} from '../../../shared/mail';
 export function MailSettings({ctx,data,refresh}:{ctx:ClientHost;data:Bootstrap;refresh:()=>Promise<void>}){
@@ -11,6 +12,7 @@ export function MailSettings({ctx,data,refresh}:{ctx:ClientHost;data:Bootstrap;r
   const [username,setUsername]=useState(''),[imapHost,setImapHost]=useState(''),[imapPort,setImapPort]=useState('993'),[imapSecure,setImapSecure]=useState(true);
   const [smtpHost,setSmtpHost]=useState(''),[smtpPort,setSmtpPort]=useState('465'),[smtpSecure,setSmtpSecure]=useState(true);
   const [reAuth,setReAuth]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState<any>(),[notice,setNotice]=useState('');
+  const [renaming,setRenaming]=useState(''),[renameAlias,setRenameAlias]=useState('');
   const [syncReadReceipts,setSyncReadReceipts]=useState(false);
   const form=useRef<HTMLDivElement>(null);
   useEffect(()=>{let active=true;call(ctx,'settings.get').then(value=>{if(active)setSyncReadReceipts(value.syncReadReceipts===true);}).catch(()=>{});return()=>{active=false;};},[ctx]);
@@ -66,6 +68,18 @@ export function MailSettings({ctx,data,refresh}:{ctx:ClientHost;data:Bootstrap;r
     setBusy(true);setError(undefined);setNotice('');
     try{await work();await refresh();}catch(e){setError(readable(e));await refresh().catch(()=>{});}finally{setBusy(false);}
   }
+  async function renameAccount(account:any){
+    const value=renameAlias.trim();
+    if(!value||busy)return;
+    setBusy(true);setError(undefined);setNotice('');
+    try{
+      await call(ctx,'mail.account.rename',{accountId:account.id,alias:value});
+      setRenaming('');setRenameAlias('');
+      await refresh();
+      ctx.ui.notify(t('账号别名已更新'),'success');
+    }catch(e){setError(readable(e));}
+    finally{setBusy(false);}
+  }
   function edit(account:any){
     setReAuth(account.id);setProvider(account.provider);setAddress(account.address);setAlias(account.alias);setAuth('');
     const imapPortValue=Number(account.imap?.port||993),smtpPortValue=Number(account.smtp?.port||465);
@@ -80,8 +94,10 @@ export function MailSettings({ctx,data,refresh}:{ctx:ClientHost;data:Bootstrap;r
       if(e.key==='Enter'&&(e.target as HTMLElement).tagName==='INPUT'){e.preventDefault();void save();}
     }}>
       <div className="form-grid">
-        <label>{t('邮箱服务商')}<select value={provider} disabled={!!reAuth} onChange={e=>setProvider(e.target.value)}>
-          <option value="163">■ 163 / 126</option><option value="qq">● QQ / Foxmail</option><option value="gmail">▲ Gmail</option><option value="custom">◆ {t('自建邮箱（IMAP / SMTP）')}</option></select></label>
+        <label>{t('邮箱服务商')}<Select label={t('邮箱服务商')} value={provider} disabled={!!reAuth} onChange={setProvider} options={[
+          {value:'163',label:'■ 163 / 126'},{value:'qq',label:'● QQ / Foxmail'},
+          {value:'gmail',label:'▲ Gmail'},{value:'custom',label:`◆ ${t('自建邮箱（IMAP / SMTP）')}`},
+        ]}/></label>
         <label>{t('邮箱地址')}<input type="email" required autoComplete="username" value={address} readOnly={!!reAuth} onChange={e=>setAddress(e.target.value)} placeholder={t('填写邮箱地址')}/></label>
         <label>{t('账号别名（最多 6 字）')}<input value={alias} maxLength={6} onChange={e=>setAlias(e.target.value)} placeholder={t('可选')}/></label>
         <label>{provider==='gmail'?t('16 位应用专用密码'):provider==='custom'?t('邮箱密码'):t('客户端授权码')}<input type="password" value={auth} onChange={e=>setAuth(e.target.value)} required autoComplete="new-password" placeholder={provider==='gmail'?'xxxx xxxx xxxx xxxx':provider==='custom'?t('填写邮箱密码'):t('填写客户端授权码')}/></label>
@@ -95,7 +111,7 @@ export function MailSettings({ctx,data,refresh}:{ctx:ClientHost;data:Bootstrap;r
           <label className="check-line"><input type="checkbox" checked={smtpSecure} onChange={e=>setSmtpSecure(e.target.checked)}/>{t('SMTP 使用 TLS')}</label>
         </>}
       </div>
-      <p className="small">{provider==='gmail'?t('开启两步验证并生成应用专用密码；不支持普通密码或 OAuth。'):provider==='custom'?t('使用 IMAP 收信、SMTP 回复；密码只保存在本机加密凭据库。'):t('请先在邮箱设置中开启 IMAP，并生成客户端授权码。')}</p>
+      <p className="small">{provider==='gmail'?t('开启两步验证并生成应用专用密码；不支持普通密码或 OAuth。'):provider==='custom'?t('使用 IMAP 收信、SMTP 发信；密码只保存在本机加密凭据库。'):t('请先在邮箱设置中开启 IMAP，并生成客户端授权码。')}</p>
       {provider==='custom'&&<p className="small">{t('常用配置：IMAP 993 + TLS 或 143 + STARTTLS；SMTP 465 + TLS 或 587 + STARTTLS。')}</p>}
       <div className="row wrap"><button type="button" className="primary" disabled={busy} onClick={()=>void save()}>{busy?t('正在校验…'):t('校验并保存')}</button>
         {reAuth&&<button type="button" disabled={busy} onClick={()=>{setReAuth('');setAddress('');setAlias('');setAuth('');setUsername('');setImapHost('');setImapPort('993');setImapSecure(true);setSmtpHost('');setSmtpPort('465');setSmtpSecure(true);setError(undefined);setNotice('');}}>{t('取消')}</button>}</div>
@@ -109,11 +125,21 @@ export function MailSettings({ctx,data,refresh}:{ctx:ClientHost;data:Bootstrap;r
     <div className="section-heading"><h2>{t('已添加账号')}<span className="count">{data.accounts.length}</span></h2></div>
     {!data.accounts.length&&<State kind="noAccounts"/>}
     {data.accounts.map(account=><article key={account.id} className="card settings-account">
-      <div className="row"><Source account={account}/><span className="address" title={account.address}>{account.address}</span></div>
+      <div className="row"><Source account={account}/><span className="address" title={account.address}>{account.address}</span>
+        {account.alias&&account.provider!=='custom'&&<span className="alias-badge">{account.alias}</span>}</div>
+      {renaming===account.id&&<form className="settings-alias-form" onSubmit={event=>{event.preventDefault();void renameAccount(account);}}>
+        <input value={renameAlias} maxLength={6} autoFocus aria-label={t('账号别名（最多 6 字）')}
+          placeholder={t('最多 6 个字')} onChange={event=>setRenameAlias(event.target.value)}/>
+        <button type="submit" className="compact" disabled={busy||!renameAlias.trim()}>{t('保存')}</button>
+        <button type="button" className="compact" disabled={busy}
+          onClick={()=>{setRenaming('');setRenameAlias('');}}>{t('取消')}</button>
+      </form>}
       {account.provider==='custom'&&account.imap&&account.smtp&&<p className="small">IMAP {account.imap.host}:{account.imap.port} · SMTP {account.smtp.host}:{account.smtp.port}</p>}
       <p className="row small"><Icon name={account.state.status==='auth_failed'?'lock':account.state.status==='offline'?'alert':'mail'} sm/>{t(connectionLabels[account.state.status])}</p>
       {account.state.status!=='connected'&&'error' in account.state&&account.state.error&&<p className="small">{account.state.error.message}</p>}
-      <div className="row wrap"><button className="compact" disabled={busy} onClick={()=>void run(()=>call(ctx,'mail.account.test',{accountId:account.id}))}>{t('立即重连')}</button>
+      <div className="row wrap"><button className="compact" disabled={busy}
+          onClick={()=>{setRenaming(account.id);setRenameAlias(account.alias||'');setError(undefined);setNotice('');}}>{t('修改别名')}</button>
+        <button className="compact" disabled={busy} onClick={()=>void run(()=>call(ctx,'mail.account.test',{accountId:account.id}))}>{t('立即重连')}</button>
         <button className="compact" disabled={busy} onClick={()=>edit(account)}>{t('重新授权')}</button>
         <button className="compact" disabled={busy} onClick={()=>void run(async()=>{if(await ctx.ui.confirm(t('删除此账号及本机凭据、邮件缓存和已读标记？')))await call(ctx,'mail.account.remove',{accountId:account.id});})}>{t('删除账号')}</button></div>
     </article>)}

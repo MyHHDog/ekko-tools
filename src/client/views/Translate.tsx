@@ -5,16 +5,18 @@ import {languages} from '../../shared/rpc-contract';
 import {countText} from '../../shared/count';
 import type {TranslationJob} from '../../shared/types';
 import {State,Icon} from '../components/States';
+import {Select} from '../components/Select';
 import {t,tFormat} from '../i18n';
 import {pickTranslationTarget} from '../../host/selection-overlay';
 import {uuid} from '../uuid';
 const languageLabels:Record<string,string>={auto:'自动检测',zh:'简体中文',en:'English',ja:'日本語',ko:'한국어',fr:'Français',de:'Deutsch',es:'Español',ru:'Русский'};
 const providerLabels:Record<string,string>={baidu:'百度翻译',deepl:'DeepL 翻译',hostModel:'宿主模型',openai:'OpenAI 兼容'};
-export function Language({value,onChange,auto=false,autoTarget=false,label}:{value:string;onChange:(s:string)=>void;auto?:boolean;autoTarget?:boolean;label:string}){
-  return <select aria-label={label} value={value} onChange={e=>onChange(e.target.value)}>
-    {autoTarget&&<option value="auto">{t('自动（中↔英）')}</option>}
-    {languages.filter(l=>auto||l!=='auto').map(l=><option key={l} value={l}>{languageLabels[l]}</option>)}
-  </select>;
+export function Language({value,onChange,auto=false,autoTarget=false,label,disabled=false}:{value:string;onChange:(s:string)=>void;auto?:boolean;autoTarget?:boolean;label:string;disabled?:boolean}){
+  const options=[
+    ...(autoTarget?[{value:'auto',label:t('自动（中↔英）')}]:[]),
+    ...languages.filter(l=>auto||l!=='auto').map(l=>({value:l,label:languageLabels[l]})),
+  ];
+  return <Select label={label} value={value} disabled={disabled} options={options} onChange={onChange}/>;
 }
 export function Translate({ctx,fragment='',target='zh',onTarget,onSettings,selection=true,onSelection=()=>{},providers}:{ctx:ClientHost;fragment?:string;target?:string;onTarget:(s:string)=>void;onSettings:()=>void;selection?:boolean;onSelection?:(v:boolean)=>void;providers?:{id:string;configured:boolean}[]}){
   const [text,setText]=useState(''),[from,setFrom]=useState('auto'),[to,setTo]=useState(target&&target!=='zh'?target:'auto');
@@ -67,7 +69,10 @@ export function Translate({ctx,fragment='',target='zh',onTarget,onSettings,selec
   }}>
     <div className="translate-toolbar">
       <div className="langbar"><Language label={t('源语言')} value={from} onChange={setFrom} auto/><button className="swap" aria-label={t('交换源语言和目标语言')} title={t('交换源语言和目标语言')} onClick={swap}><Icon name="swap" sm/></button><Language label={t('目标语言')} value={to} onChange={v=>{setTo(v);onTarget(v==='auto'?'zh':v);}} autoTarget/></div>
-      {providers&&<label className="translate-options"><span className="translate-option-label"><Icon name="translate" sm/><span>{t('翻译服务')}</span></span><select aria-label={t('翻译服务')} value={provider} onChange={e=>setProvider(e.target.value)}><option value="">{t('跟随设置')}</option>{providers.map(p=><option key={p.id} value={p.id} disabled={!p.configured}>{t(providerLabels[p.id]||p.id)}{!p.configured?` (${t('未配置')})`:''}</option>)}</select></label>}
+      {providers&&<label className="translate-options"><span className="translate-option-label"><Icon name="translate" sm/><span>{t('翻译服务')}</span></span><Select label={t('翻译服务')} value={provider} onChange={setProvider} options={[
+        {value:'',label:t('跟随设置')},
+        ...providers.map(p=>({value:p.id,label:`${t(providerLabels[p.id]||p.id)}${!p.configured?` (${t('未配置')})`:''}`,disabled:!p.configured})),
+      ]}/></label>}
     </div>
     {providers&&!providers.some(p=>p.configured)&&<div className="state warn"><Icon name="lock"/><div><strong>{t('尚未配置翻译服务')}</strong><p>{t('请选择宿主模型或配置一个翻译服务。')}</p><button className="compact" onClick={onSettings}>{t('去配置')}</button></div></div>}
     {from==='auto'&&job?.result?.detectedFrom&&<p className="small" role="status">{t('检测语言：')}{languageLabels[job.result.detectedFrom]||job.result.detectedFrom}</p>}

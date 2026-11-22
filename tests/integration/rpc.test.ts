@@ -15,11 +15,87 @@ afterEach(async()=>{for(const h of open.splice(0))await h.close();vi.restoreAllM
 async function start(options:Parameters<typeof harness>[0]={}){const h=await harness(options);open.push(h);return h;}
 
 describe('真实 RPC 集成',()=>{
+  it('草稿可跨运行时重开，且按用户和 Profile 隔离',async()=>{
+    const h=await start(),draft=await unwrap(h,'mail.draft.save',{accountId:'',to:'未完成',subject:'草稿',body:'尚未发送'});
+    const {body,...summary}=draft;
+    expect(await unwrap(h,'mail.draft.list')).toEqual([summary]);
+    for(const other of [{userId:1,profile:'other'},{userId:2,profile:'test'}]){
+      expect(await h.call('mail.draft.list',{},other)).toEqual({ok:true,data:[]});
+      expect(await h.call('mail.draft.get',{id:draft.id},other)).toMatchObject({ok:false,error:{code:'NOT_FOUND'}});
+      expect(await h.call('mail.send',{id:draft.id},other)).toMatchObject({ok:false,error:{code:'NOT_FOUND'}});
+    }
+    await h.close(false);
+    const restarted=await harness({directory:h.directory,storage:h.storage});
+    try{
+      expect(await unwrap(restarted,'mail.draft.get',{id:draft.id})).toEqual({...summary,body});
+      expect(await unwrap(restarted,'mail.draft.delete',{id:draft.id})).toEqual({deleted:true});
+      expect(await unwrap(restarted,'mail.draft.list')).toEqual([]);
+    }finally{await restarted.close(false);}
+  });
+
+  it('SMTP 校验失败或拒绝保留草稿，接受后删除且同一草稿不会重复发信',async()=>{
+    const real=new FixtureConnector(),h=await start({real}),[,sender]=await addFixtures(h);
+    const fields={accountId:sender.id,to:'recipient@example.invalid',subject:'新邮件',body:'正文\n第二行'},reply=vi.spyOn(real,'reply');
+    const draft=await unwrap(h,'mail.draft.save',{...fields,to:'first@example.invalid,second@example.invalid'}),{id}=draft;
+    expect(await h.call('mail.send',{id})).toMatchObject({ok:false,error:{code:'VALIDATION'}});
+    expect(reply).not.toHaveBeenCalled();
+    expect(await unwrap(h,'mail.draft.save',{id,...fields})).toMatchObject({id,...fields});
+    reply.mockRejectedValueOnce(new AppError('SEND_FAILED'));
+    expect(await h.call('mail.send',{id})).toMatchObject({ok:false,error:{code:'SEND_FAILED'}});
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(await unwrap(h,'mail.draft.get',{id})).toMatchObject(fields);
+    const results=await Promise.all([h.call('mail.send',{id}),h.call('mail.send',{id})]);
+    expect(results).toMatchObject([{ok:true,data:{sent:true}},{ok:false,error:{code:'NOT_FOUND'}}]);
+    expect(reply).toHaveBeenCalledTimes(2);
+    expect(reply.mock.calls[1][0].account.id).toBe(sender.id);
+    expect(real.sent).toEqual([{to:fields.to,subject:fields.subject,text:fields.body}]);
+    expect(await unwrap(h,'mail.draft.list')).toEqual([]);
+  });
+
   it('逐次 RPC 使用各自调用的存储作用域',async()=>{
     const h=await start();
     expect((await unwrap(h,'app.bootstrap')).accounts).toHaveLength(0);
     expect((await unwrap(h,'settings.get')).glossary).toEqual([]);
     expect((await unwrap(h,'translate.cache-stats')).entries).toBe(0);
+  });
+
+  it('分片隔离、完整校验后保存 Markdown 和附件，重启后可同时发送两种 MIME 正文与原文件',async()=>{
+    const real=new FixtureConnector(),h=await start({real}),[sender]=await addFixtures(h),replies=vi.spyOn(real,'reply');
+    const content=Buffer.from('测试附件'),name='会议记录.txt';
+    const {uploadId}=await unwrap(h,'mail.draft.upload-start',{bytes:content.length,kind:'attachment'});
+    const part=(id:string,offset:number,bytes:Buffer)=>({wire:`${id}!${offset.toString(36)}!${bytes.toString('base64url')}`});
+    const chunk=part(uploadId,0,content.subarray(0,4));
+    expect(await h.call('mail.draft.upload-chunk',chunk,{userId:2,profile:'test'})).toMatchObject({ok:false,error:{code:'NOT_FOUND'}});
+    expect(await h.call('mail.draft.upload-chunk',part(uploadId,1,content.subarray(0,4)))).toMatchObject({ok:false,error:{code:'VALIDATION'}});
+    expect(await unwrap(h,'mail.draft.upload-chunk',chunk)).toEqual({received:4});
+    const body='## 日程\n**周一**开会\n<img src=x>\n[危险链接](javascript:example)';
+    const draft={accountId:sender.id,to:'recipient@example.invalid',subject:'会议',body,format:'markdown',attachments:[{id:uploadId,name}]};
+    expect(await h.call('mail.draft.save',draft)).toMatchObject({ok:false,error:{code:'VALIDATION'}});
+    await unwrap(h,'mail.draft.upload-chunk',part(uploadId,4,content.subarray(4)));
+    const snapshot=Buffer.from(JSON.stringify(draft));
+    const staged=await unwrap(h,'mail.draft.upload-start',{bytes:snapshot.length,kind:'snapshot'});
+    await unwrap(h,'mail.draft.upload-chunk',part(staged.uploadId,0,snapshot));
+    const saved=await unwrap(h,'mail.draft.commit',staged);
+    expect(saved.attachments).toEqual([{id:uploadId,name,bytes:content.length}]);
+    await h.close(false);
+    const restarted=await harness({directory:h.directory,storage:h.storage,real});
+    try{
+      expect(await unwrap(restarted,'mail.draft.get',{id:saved.id})).toEqual(saved);
+      replies.mockRejectedValueOnce(new AppError('SEND_FAILED'));
+      expect(await restarted.call('mail.send',{id:saved.id})).toMatchObject({ok:false,error:{code:'SEND_FAILED'}});
+      expect(await unwrap(restarted,'mail.draft.get',{id:saved.id})).toEqual(saved);
+      expect(await unwrap(restarted,'mail.send',{id:saved.id})).toMatchObject({sent:true});
+      expect(replies.mock.calls[1][1]).toMatchObject({text:body,html:expect.stringContaining('<strong>周一</strong>'),attachments:[{filename:name,content}]});
+      expect(replies.mock.calls[1][1].html).toContain('&lt;img src=x&gt;');
+      expect(replies.mock.calls[1][1].html).not.toContain('<a ');
+      expect(await restarted.call('mail.draft.get',{id:saved.id})).toMatchObject({ok:false,error:{code:'NOT_FOUND'}});
+    }finally{await restarted.close(false);}
+  });
+
+  it('远程图标代理拒绝非公网协议并返回空数据',async()=>{
+    const h=await start();
+    expect(await unwrap(h,'media.image',{url:'file:///etc/passwd'})).toEqual({data:''});
+    expect(await unwrap(h,'media.image',{url:'http://127.0.0.1/a.png'})).toEqual({data:''});
   });
 
   it('添加三个邮箱后跑通收件箱→筛选→详情→双语→附件→删除',async()=>{
@@ -116,6 +192,8 @@ describe('真实 RPC 集成',()=>{
     const notifications={enabled:false,dndEnabled:true,dndStart:'21:30',dndEnd:'07:15',mutedAccountIds:[]};
     await unwrap(h,'settings.save',{notifications});
     expect((await unwrap(h,'settings.get')).notifications).toEqual(notifications);
+    await unwrap(h,'settings.save',{mailBodyZoom:130});
+    expect((await unwrap(h,'settings.get')).mailBodyZoom).toBe(130);
     expect(await unwrap(h,'app.diagnostics')).toHaveProperty('entries');
   });
 
@@ -159,7 +237,7 @@ describe('真实 RPC 集成',()=>{
     const page=await unwrap(h,'mail.list',{limit:100});
     expect(page.updated).toBe(2);expect(page.total).toBe(3);expect(page.items).toHaveLength(11);
     expect((await unwrap(h,'app.bootstrap')).accounts.find((a:any)=>a.id===qq.id).state.status).toBe('auth_failed');
-    expect(h.events.filter(e=>e.type==='account.state'&&e.data.accountId===qq.id&&e.data.state.status==='connecting')).toHaveLength(2);
+    expect(h.events.filter(e=>e.type==='account.state'&&e.data.accountId===qq.id&&e.data.state.status==='connecting')).toHaveLength(1);
     expect(JSON.stringify(h.logs)).not.toContain('fixture-auth-code');
   });
 
@@ -204,5 +282,22 @@ describe('真实 RPC 集成',()=>{
     const boot=await unwrap(h,'app.bootstrap');
     expect(boot.accounts).toHaveLength(1);expect(boot.accounts[0].id).toBe(account.id);
     expect(JSON.stringify(boot)).not.toContain('mock');
+  });
+
+  it('账号别名可单独修改，不改变连接状态与凭据',async()=>{
+    const h=await start(),[account]=await addFixtures(h);
+    const before=await unwrap(h,'app.bootstrap');
+    const renamed=await unwrap(h,'mail.account.rename',{accountId:account.id,alias:'工作日'});
+    expect(renamed.alias).toBe('工作日');
+    const after=await unwrap(h,'app.bootstrap');
+    const target=after.accounts.find((item:any)=>item.id===account.id);
+    expect(target).toMatchObject({alias:'工作日',state:before.accounts.find((item:any)=>item.id===account.id).state});
+    const vault=new Vault(join(h.directory,partition({identity:h.host.identity} as any)));
+    expect(await vault.get(account.id)).toBe('fixture-auth-code');
+    const empty=await h.call('mail.account.rename',{accountId:account.id,alias:'   '});
+    expect(empty.ok).toBe(false);expect(empty.error.code).toBe('VALIDATION');
+    const long=await h.call('mail.account.rename',{accountId:account.id,alias:'一二三四五六七'});
+    expect(long.ok).toBe(false);expect(long.error.code).toBe('VALIDATION');
+    await h.close();open.splice(open.indexOf(h),1);
   });
 });

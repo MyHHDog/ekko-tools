@@ -21,11 +21,20 @@ paths.star='M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.
 paths.spark='M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z M18.5 15l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z';
 paths.external='M14 4h6v6 M20 4l-9 9 M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5';
 paths.folder='M3 6h7l2 2h9v11H3z';
+paths.inbox='M5 4h14l3 9v5a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-5z M2 13h6l1.5 3h5l1.5-3h6';
+paths.draft='M6 3h8l4 4v14H6z M14 3v5h4 M9 12h6 M9 16h6';
 paths['chevron-right']='M9 6l6 6-6 6';
 paths['chevron-down']='M6 9l6 6 6-6';
 paths.book='M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z M4 21.5V5.5 M8 7h8 M8 11h8';
 paths.expand='M8 3H3v5 M16 3h5v5 M21 16v5h-5 M3 16v5h5';
 paths.collapse='M3 8h5V3 M21 8h-5V3 M16 21v-5h5 M8 21v-5H3';
+paths.bold='M6 4h7a4 4 0 0 1 0 8H6z M6 12h8a4 4 0 0 1 0 8H6z';
+paths.italic='M11 4h9 M4 20h9 M15.5 4l-7 16';
+paths.heading='M5 5v14 M19 5v14 M5 12h14';
+paths.list='M9 6h11 M9 12h11 M9 18h11 M4 6h.01 M4 12h.01 M4 18h.01';
+paths.quote='M9 7H4v6h5l-2 5 M20 7h-5v6h5l-2 5';
+paths.code='M8 6l-6 6 6 6 M16 6l6 6-6 6 M14 4l-4 16';
+paths.link='M10 13l4-4 M9 16l-2 2a3.5 3.5 0 0 1-5-5l4-4a3.5 3.5 0 0 1 5 0 M15 8l2-2a3.5 3.5 0 0 1 5 5l-4 4a3.5 3.5 0 0 1-5 0';
 export function Icon({name='mail',sm=false}:{name?:string;sm?:boolean}){return <svg className={sm?'icon sm':'icon'} viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]||paths.mail}/></svg>;}
 const EMPTY=/^(noAccounts|emptyInbox|emptyFilter|emptyInput)$/,WARN=/^(missingKey|offline)$/,LOADING=/^(syncing|translating)$/;
 export function State({kind,detail,action}:{kind:typeof stateDefinitions[number][0];detail?:string;action?:ReactNode}){

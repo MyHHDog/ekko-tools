@@ -1,0 +1,49 @@
+/* Studio 几何：卡片 8px、控件 6px、胶囊 999px。 */
+.mail-client,
+.reading-view,
+.reading-article{border-radius:var(--ek-radius-content)}
+.settings-nav{border-radius:var(--ek-radius-sidebar)}
+.settings-section .card,
+.translate-view .card,
+.langbar,
+.translate-options{border-radius:var(--ek-radius-card)}
+.reading-assistant,
+.reading-discover-panel,
+.selection-popover,
+.reading-menu{border-radius:var(--ek-radius-overlay)}
+.folder-avatar,
+.detail .avatar,
+.detail .meta,
+.detail .attachment,
+.settings-account,
+.appearance-backdrop,
+.reading-brand-icon,
+.reading-nav button,
+.reading-folder,
+.reading-feed,
+.reading-row,
+.reading-thumb,
+.reading-detail-actions button,
+.reading-detail-actions a,
+.reading-back,
+.reading-digest-item,
+.reading-discover-card,
+.reading-menu button,
+.selection-popover button{border-radius:var(--ek-radius-sm)}
+.mail-list-head .field,
+.reading-list-head .field,
+.reading-add-form input,
+.reading-add-form button,
+.reading-discover-tools .field,
+.reading-discover-folder select,
+.reading-style-css textarea,
+.appearance-color input,
+.detail .body-frame iframe,
+.reading-plain{border-radius:var(--ek-radius-input)}
+
+/* 移动端：邮件与阅读使用同一内容容器圆角，避免几何层把移动端圆角覆盖为 0。 */
+@media (max-width:760px){
+  .mail-client,
+  .reading-view{border-radius:16px}
+  .reading-row{border-radius:12px}
+}

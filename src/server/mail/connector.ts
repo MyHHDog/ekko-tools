@@ -6,6 +6,7 @@ export interface ReplyMessage {
   subject:string;
   text:string;
   html?:string;
+  attachments?:{filename:string;content:Buffer}[];
   inReplyTo?:string;
   references?:string[];
 }
@@ -15,6 +16,7 @@ export interface Connector {
   list(acc:Credentials,q:{cursor?:string;limit:number},signal:AbortSignal):Promise<{items:MailSummary[];nextCursor?:string;reset?:boolean}>;
   olderCursor?(acc:Credentials,messageIds:string[],signal:AbortSignal):Promise<string|undefined>;
   fetch(acc:Credentials,messageId:string,signal:AbortSignal):Promise<RawMail>;
+  moveToTrash?(acc:Credentials,messageId:string,signal:AbortSignal):Promise<void>;
   seen?(acc:Credentials,messageIds:string[],signal:AbortSignal):Promise<Record<string,boolean>>;
   markRead?(acc:Credentials,messageId:string,read:boolean,signal:AbortSignal):Promise<void>;
   markReadMany?(acc:Credentials,messageIds:string[],read:boolean,signal:AbortSignal):Promise<void>;

@@ -2,6 +2,7 @@ import { pickTranslationTarget, studioSelectionRuntime } from '../host/selection
 import type { StudioSelectionConfig } from '../host/selection-overlay';
 
 let attempted = false;
+const RUNTIME_VERSION = 5;
 
 function parentDocument(): { win: any; doc: Document } | null {
   try {
@@ -21,9 +22,13 @@ export function installStudioSelection(config: StudioSelectionConfig) {
   const parent = parentDocument();
   if (!parent) return;
   const { win, doc } = parent;
-  if (win.__EK_TOOLS_SELECTION__) {
-    win.__EK_TOOLS_SELECTION__.update(config);
-    return;
+  const existing = win.__EK_TOOLS_SELECTION__;
+  if (existing) {
+    if (existing.version === RUNTIME_VERSION) {
+      existing.update(config);
+      return;
+    }
+    try { existing.destroy?.(); } catch { /* 旧运行时可能已失效，继续注入新版本。 */ }
   }
   if (attempted) return;
   attempted = true;

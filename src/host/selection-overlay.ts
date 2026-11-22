@@ -31,8 +31,9 @@ export function pickTranslationTarget(text: string, fallback: string) {
 export function studioSelectionRuntime(initial: StudioSelectionConfig, pick?: (text: string, fallback: string) => string) {
   const w = window as any;
   const doc = document;
+  const RUNTIME_VERSION = 5;
   if (w.__EK_TOOLS_SELECTION__) {
-    w.__EK_TOOLS_SELECTION__.update(initial);
+    if (w.__EK_TOOLS_SELECTION__.version === RUNTIME_VERSION) w.__EK_TOOLS_SELECTION__.update(initial);
     return;
   }
   const state = {
@@ -57,29 +58,37 @@ export function studioSelectionRuntime(initial: StudioSelectionConfig, pick?: (t
   const MAX_CHARS = 1500;
 
   const css = `
-    :host{all:initial}
+    :host{all:initial;color-scheme:var(--studio-color-scheme,light);--ek-text:var(--text-primary,#23272b);
+      --ek-muted:var(--text-secondary,#5f666e);
+      --ek-surface:var(--theme-card-bg,var(--bg-card,rgb(252 253 254 / 96%)));
+      --ek-inset:var(--theme-input-bg,var(--bg-input,rgb(244 246 248 / 96%)));
+      --ek-border:var(--border-color,rgb(32 40 48 / 18%));
+      --ek-rule:var(--border-light,rgb(32 40 48 / 10%));
+      --ek-accent:var(--accent-primary,#2f353b);
+      --ek-hover:color-mix(in srgb,var(--text-primary,#23272b) 8%,transparent);
+      --ek-focus:var(--accent-primary,#2f353b)}
     .bar{position:fixed;left:0;top:0;z-index:2147483000;box-sizing:border-box;
       width:min(420px,calc(100vw - 24px));padding:7px 8px 8px;pointer-events:auto;
-      color:var(--text-primary,#eef4ff);font-family:var(--font-family,"Segoe UI","Microsoft YaHei UI",sans-serif);
-      font-size:13px;line-height:1.45;background:color-mix(in srgb,var(--bg-secondary,#142b4d) 88%,#071528);
-      border:1px solid var(--border-color,rgba(170,196,236,.34));border-radius:14px;
-      box-shadow:0 18px 46px rgba(3,12,27,.42);visibility:hidden}
+      color:var(--ek-text);font-family:var(--font-family,"Segoe UI","Microsoft YaHei UI",sans-serif);
+      font-size:13px;line-height:1.45;background:var(--ek-surface);
+      border:1px solid var(--ek-border);border-radius:12px;
+      -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+      box-shadow:0 6px 20px rgb(20 28 36 / 16%);visibility:hidden}
     .head{display:flex;align-items:center;gap:6px;min-height:28px}
-    .dot{width:8px;height:8px;border-radius:50%;background:var(--accent-color,#6f8fd0);
-      box-shadow:0 0 0 4px color-mix(in srgb,var(--accent-color,#6f8fd0) 22%,transparent);flex:none}
-    .name{font-weight:600;letter-spacing:.2px;color:var(--text-primary,#eef4ff);white-space:nowrap}
+    .dot{width:6px;height:6px;border-radius:50%;background:var(--ek-accent);flex:none}
+    .name{font-weight:600;white-space:nowrap}
     .status{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-      color:var(--text-secondary,#b9c7dd);font-size:12px}
+      color:var(--ek-muted);font-size:12px}
     .grow{flex:1}
     button{all:unset;box-sizing:border-box;cursor:pointer;height:26px;padding:0 9px;border-radius:8px;
-      font:inherit;font-size:12px;color:var(--text-secondary,#b9c7dd);white-space:nowrap}
-    button:hover{background:color-mix(in srgb,var(--text-primary,#eef4ff) 10%,transparent);color:var(--text-primary,#eef4ff)}
+      font:inherit;font-size:12px;color:var(--ek-muted);white-space:nowrap}
+    button:hover{background:var(--ek-hover);color:var(--ek-text)}
+    button:focus-visible{outline:2px solid var(--ek-focus);outline-offset:1px}
     .close{padding:0 6px;font-size:15px;line-height:1}
     .result{margin-top:6px;padding:7px 8px;max-height:230px;overflow:auto;white-space:pre-wrap;
-      user-select:text;border-radius:9px;background:color-mix(in srgb,var(--bg-primary,#0d1f38) 55%,transparent);
-      border:1px solid color-mix(in srgb,var(--border-color,rgba(170,196,236,.34)) 60%,transparent);
-      color:var(--text-primary,#eef4ff);font-size:13px;line-height:1.6}
-    .result.error{color:var(--error-color,#e6b0a8)}
+      user-select:text;border-radius:8px;background:var(--ek-inset);
+      border:1px solid var(--ek-rule);font-size:13px;line-height:1.6}
+    .result.error{color:var(--error-color,#a33d33)}
     .result[hidden],button[hidden]{display:none}
   `;
   const markup = `<div class="bar" hidden part="bar">
@@ -96,7 +105,7 @@ export function studioSelectionRuntime(initial: StudioSelectionConfig, pick?: (t
     if (host && doc.contains(host)) return;
     host = doc.createElement('div');
     host.id = 'ekko-tools-selection-root';
-    host.style.cssText = 'position:fixed;inset:0;z-index:2147483000;pointer-events:none;';
+    host.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483000;pointer-events:none!important;';
     const shadow = host.attachShadow({ mode: 'open' });
     shadow.innerHTML = `<style>${css}</style>${markup}`;
     bar = shadow.querySelector('.bar') as HTMLDivElement;
@@ -348,7 +357,7 @@ export function studioSelectionRuntime(initial: StudioSelectionConfig, pick?: (t
     delete w.__EK_TOOLS_SELECTION__;
   }
 
-  w.__EK_TOOLS_SELECTION__ = { update, destroy };
+  w.__EK_TOOLS_SELECTION__ = { version: RUNTIME_VERSION, update, destroy };
   doc.addEventListener('mouseup', onMouseUp, true);
   doc.addEventListener('keyup', onKeyUp, true);
   doc.addEventListener('keydown', onKeyDown, true);

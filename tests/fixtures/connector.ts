@@ -1,5 +1,5 @@
 import fixtures from './index.json';
-import type { Connector, Credentials } from '../../src/server/mail/connector';
+import type { Connector, Credentials, ReplyMessage } from '../../src/server/mail/connector';
 import type { RawMail } from '../../src/server/mail/parse';
 import { AppError } from '../../src/shared/error-codes';
 
@@ -75,7 +75,7 @@ export class FixtureConnector implements Connector {
     for (const messageId of messageIds) this.seenByMessage.set(this.key(acc, messageId), read);
   }
 
-  async reply(_acc: Credentials, message: { to: string; subject: string; text: string }, _signal: AbortSignal) {
+  async reply(_acc: Credentials, message: ReplyMessage, _signal: AbortSignal) {
     this.sent.push({ to: message.to, subject: message.subject, text: message.text });
     return { messageId: '<fixture-reply@ekko-tools>' };
   }

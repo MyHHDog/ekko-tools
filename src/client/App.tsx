@@ -24,6 +24,7 @@ export function App({ctx,initialData,refreshOnMount=false}:{ctx:ClientHost;initi
   const [data,setData]=useState<Bootstrap|undefined>(()=>initialData??readBootstrapCache(ctx)),[error,setError]=useState<any>(),[fragment,setFragment]=useState(''),[target,setTarget]=useState('zh'),[selection,setSelection]=useState(true),[selectionReady,setSelectionReady]=useState(false),[unread,setUnread]=useState(0);
   const bootstrapped=useRef(initialData);
   const [node,setNode]=useState<HTMLElement|null>(null),active=useRef(true),seen=useRef(new Set<string>()),polling=useRef(false);
+  const notified=useRef(new Map<string,number>()),recentlyRead=useRef(new Map<string,number>());
   const notifySettings=useRef(defaultNotifications);
   async function refresh(){const value=await call<Bootstrap>(ctx,'app.bootstrap');if(active.current){setData(value);setError(undefined);writeBootstrapCache(ctx,value);}}
   useEffect(()=>{
@@ -37,17 +38,40 @@ export function App({ctx,initialData,refreshOnMount=false}:{ctx:ClientHost;initi
         setSelection(settings.selection!==false);notifySettings.current=normalizeNotifications(settings.notifications);setSelectionReady(true);
       }catch(e){if(active.current){setError(readable(e));setSelectionReady(true);}}
     })();
-    const unsubscribe=['account.state','mail.arrived','translate.progress'].map(type=>ctx.messages.on(type,event=>{
+    const unsubscribe=['account.state','mail.arrived','mail.read','mail.deleted','translate.progress'].map(type=>ctx.messages.on(type,event=>{
       if(event.identity&&ctx.identity&&(event.identity.userId!==ctx.identity.userId||event.identity.profile!==ctx.identity.profile))return;
       const value=event.data||event;if(!value.eventId||seen.current.has(value.eventId))return;seen.current.add(value.eventId);
       if(seen.current.size>500)seen.current.delete(seen.current.values().next().value!);
       if(type==='account.state')setData(old=>old?{...old,accounts:old.accounts.map(a=>a.id===value.accountId?{...a,state:value.state}:a)}:old);
+      if(type==='mail.read'||type==='mail.deleted'){
+        if(!value.accountId||!value.messageId)return;
+        const key=value.accountId+':'+value.messageId;
+        if(type==='mail.deleted'||value.read===true)recentlyRead.current.set(key,Date.now());else recentlyRead.current.delete(key);
+        if(recentlyRead.current.size>500)recentlyRead.current.delete(recentlyRead.current.keys().next().value!);
+        return;
+      }
       if(type==='mail.arrived'){
-        if(activeTabRef.current==='收件箱')return;
-        const settings=notifySettings.current;
-        const muted=settings.mutedAccountIds.includes(value.accountId);
-        if(value.count<=0||!settings.enabled||muted||inQuietHours(settings))return;
-        ctx.ui.notify(tFormat('收到 {count} 封新邮件',{count:value.count}));
+        const now=Date.now(),ttl=24*60*60*1000,readTtl=5*60*1000;
+        for(const [key,at] of recentlyRead.current)if(now-at>readTtl)recentlyRead.current.delete(key);
+        const accountId=value.accountId;
+        if(typeof accountId!=='string'||!accountId||!Array.isArray(value.messageIds))return;
+        const ids=new Set<string>(value.messageIds.filter((id:unknown)=>typeof id==='string'&&id.length>0));
+        const fresh=[...ids].filter(id=>{
+          const key=accountId+':'+id,at=notified.current.get(key);
+          return !recentlyRead.current.has(key)&&(at===undefined||now-at>ttl);
+        });
+        for(const id of fresh)notified.current.set(accountId+':'+id,now);
+        while(notified.current.size>1000)notified.current.delete(notified.current.keys().next().value!);
+        const canNotify=()=>{
+          const settings=notifySettings.current;
+          return active.current&&activeTabRef.current!=='收件箱'&&settings.enabled&&
+            !settings.mutedAccountIds.includes(accountId)&&!inQuietHours(settings);
+        };
+        if(!fresh.length||!canNotify())return;
+        void call<{messageIds:string[]}>(ctx,'mail.unread-status',{accountId,messageIds:fresh}).then(result=>{
+          const count=result.messageIds.filter(id=>!recentlyRead.current.has(accountId+':'+id)).length;
+          if(count&&canNotify())ctx.ui.notify(tFormat('收到 {count} 封新邮件',{count}));
+        }).catch(()=>{});
       }
     }));
     return()=>{active.current=false;unsubscribe.forEach(fn=>fn());};

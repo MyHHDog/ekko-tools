@@ -18,7 +18,14 @@ function shadow() {
   return document.getElementById('ekko-tools-selection-root')?.shadowRoot || null;
 }
 
+function overlayHost() {
+  return document.getElementById('ekko-tools-selection-root') as HTMLElement | null;
+}
+
 beforeEach(() => {
+  (window as any).__EK_TOOLS_SELECTION__?.destroy();
+  delete (window as any).__EK_TOOLS_SELECTION__;
+  window.getSelection()?.removeAllRanges();
   document.body.innerHTML = '';
   window.localStorage.clear();
   window.localStorage.setItem('hermes_api_key', 'fixture-token');
@@ -48,6 +55,18 @@ it('在宿主对话页选中文字后自动翻译，并把译文放进划词浮�
   );
   const body = JSON.parse(String((fetchMock.mock.calls[0] as any[])[1].body));
   expect(body).toMatchObject({ kind: 'rpc', name: 'translate.run', input: { text: 'Hello world', from: 'auto', to: 'zh' } });
+});
+
+it('浮层宿主不覆盖宿主页面点击区域，并标记运行时不小于 2', async () => {
+  await new Promise(resolve => setTimeout(resolve, 60));
+  studioSelectionRuntime({ enabled: true, target: 'zh', pluginId: 'ekko-tools' }, pickTranslationTarget);
+  selectText('Hello world');
+  await new Promise(resolve => setTimeout(resolve, 60));
+  const host = overlayHost()!;
+  expect(host.style.width).toBe('0px');
+  expect(host.style.height).toBe('0px');
+  expect(host.style.pointerEvents).toBe('none');
+  expect((window as any).__EK_TOOLS_SELECTION__.version).toBeGreaterThanOrEqual(2);
 });
 
 it('目标语言变化后请求新语言，关闭开关立即隐藏浮条', async () => {

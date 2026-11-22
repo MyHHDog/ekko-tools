@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "description": "ekko-tools 侧栏翻译与只读统一收件箱：跨边界 RPC、事件与持久化结构契约；密钥只入 vault，前端只收 configured 标记。",
+  "description": "ekko-tools 翻译、统一邮箱与阅读：跨边界 RPC、事件与持久化结构契约；密钥只入 vault，前端只收 configured 标记。",
   "models": {
     "errorInfo": {
       "type": "object",
       "description": "统一错误信息；message 为用户可读中文，不含任何凭据或邮件正文。",
       "properties": {
-        "code": { "type": "string", "description": "错误码，取自 ErrorCode 枚举（NETWORK_UNREACHABLE/TIMEOUT/AUTH_FAILED 等 15 个）。" },
+        "code": { "type": "string", "description": "错误码，取自 ErrorCode 枚举；MAIL_TRASH_UNAVAILABLE 表示无法安全移入垃圾箱，MAIL_DELETE_FAILED 表示移动未获确认。" },
         "message": { "type": "string", "description": "用户可读的中文错误说明。", "maxLength": 300 },
         "retryable": { "type": "boolean", "description": "是否允许自动/手动重试。" },
         "accountId": { "type": "string", "description": "可选：出错账号 ID，用于列表部分失败标记。", "maxLength": 64 },
@@ -470,6 +470,7 @@
         "selection": { "type": "boolean", "description": "可选：是否启用划词浮条。" },
         "logLevel": { "type": "string", "enum": ["off", "error", "warn", "info"], "description": "可选：日志级别。" },
         "syncReadReceipts": { "type": "boolean", "description": "可选：是否把已读/未读标记回写到 IMAP 服务器；默认关闭，关闭时只写本机。" },
+        "mailBodyZoom": { "type": "number", "minimum": 20, "maximum": 200, "description": "可选：邮件正文缩放百分比，范围 20–200，默认 100。" },
         "notifications": { "type": "object", "description": "可选：新邮件提醒设置；省略时沿用已保存值。", "properties": {
           "enabled": { "type": "boolean", "description": "是否推送新邮件提醒。" },
           "dndEnabled": { "type": "boolean", "description": "是否启用免打扰时段。" },
@@ -498,6 +499,7 @@
         "selection": { "type": "boolean", "description": "可选：划词浮条开关。" },
         "logLevel": { "type": "string", "description": "可选：日志级别。", "maxLength": 10 },
         "syncReadReceipts": { "type": "boolean", "description": "是否把已读/未读标记回写到 IMAP 服务器；默认 false。" },
+        "mailBodyZoom": { "type": "number", "minimum": 20, "maximum": 200, "description": "邮件正文缩放百分比；默认 100。" },
         "notifications": { "type": "object", "description": "新邮件提醒设置；未保存时回传默认值。", "properties": {
           "enabled": { "type": "boolean", "description": "是否推送新邮件提醒。" },
           "dndEnabled": { "type": "boolean", "description": "是否启用免打扰时段。" },
@@ -562,6 +564,17 @@
         "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 }
       },
       "required": ["accountId"],
+      "additionalProperties": false
+    },
+    "mailAccountRenameInput": {
+      "type": "object",
+      "description": "修改账号的本地展示别名，不重测连接、不改凭据。",
+      "properties": {
+        "accountId": { "type": "string", "description": "账号 ID。", "minLength": 1, "maxLength": 200 },
+        "alias": { "type": "string", "description": "新的账号别名，最多 6 个字符。", "minLength": 1, "maxLength": 24 },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 }
+      },
+      "required": ["accountId", "alias"],
       "additionalProperties": false
     },
     "removeAccountOutput": {
@@ -780,6 +793,38 @@
       "required": ["accountId", "messageId", "confirmed", "allowedDomains"],
       "additionalProperties": false
     },
+    "mailUnreadStatusInput": {
+      "type": "object",
+      "description": "弹出新邮件提醒前，按账号与邮件 ID 复核本地未读状态。",
+      "properties": {
+        "accountId": { "type": "string", "description": "账号 ID。", "minLength": 1, "maxLength": 64 },
+        "messageIds": { "type": "array", "description": "到达事件中的邮件 ID，最多 100 个。", "maxItems": 100, "items": { "type": "string", "description": "邮件 ID。", "minLength": 1, "maxLength": 200 } },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 }
+      },
+      "required": ["accountId", "messageIds"],
+      "additionalProperties": false
+    },
+    "mailUnreadStatusOutput": {
+      "type": "object",
+      "description": "本地缓存中仍为未读的邮件；不访问 IMAP、不读取邮件正文。",
+      "properties": {
+        "messageIds": { "type": "array", "description": "仍未读的 ID，去重；已读或未缓存的 ID 不返回。", "maxItems": 100, "items": { "type": "string", "description": "邮件 ID。", "minLength": 1, "maxLength": 200 } }
+      },
+      "required": ["messageIds"],
+      "additionalProperties": false
+    },
+    "mailDeleteInput": {
+      "type": "object",
+      "description": "将当前身份的指定收件箱邮件移到邮箱服务器的垃圾箱。",
+      "properties": {
+        "accountId": { "type": "string", "description": "账号 ID。", "minLength": 1, "maxLength": 64 },
+        "messageId": { "type": "string", "description": "收件箱邮件 ID。", "minLength": 1, "maxLength": 200 },
+        "__requestId": { "type": "string", "description": "内部字段：请求标识。", "maxLength": 200 }
+      },
+      "required": ["accountId", "messageId"],
+      "additionalProperties": false
+    },
+    "mailDeleteOutput": { "type": "object", "description": "邮件删除结果。", "properties": { "deleted": { "type": "boolean", "description": "服务器确认移动且本地缓存已移除时返回 true；否则 RPC 失败。" } }, "required": ["deleted"], "additionalProperties": false },
     "markReadInput": {
       "type": "object",
       "description": "本地已读/未读标记（不回写服务器）。",
@@ -837,7 +882,7 @@
     },
     "mailReplyOutput": {
       "type": "object",
-      "description": "SMTP 回复结果。",
+      "description": "SMTP 提交结果；服务器接收不代表最终投递。",
       "properties": {
         "sent": { "type": "boolean", "description": "服务器已接受发信请求。" },
         "messageId": { "type": "string", "description": "可选：SMTP 返回的 Message-ID。", "maxLength": 900 }
@@ -845,6 +890,72 @@
       "required": ["sent"],
       "additionalProperties": false
     },
+    "mailDraft": {
+      "type": "object", "description": "本机草稿正文和元数据。",
+      "properties": {
+        "id": { "type": "string", "description": "草稿 ID。", "minLength": 1, "maxLength": 200 },
+        "accountId": { "type": "string", "description": "发信账号 ID；未选时为空。", "maxLength": 200 },
+        "to": { "type": "string", "description": "单个收件地址；草稿可留空或不完整。", "maxLength": 254 },
+        "subject": { "type": "string", "description": "邮件主题。", "maxLength": 200 },
+        "body": { "type": "string", "description": "纯文本或 Markdown 源正文。", "maxLength": 20000 },
+        "format": { "type": "string", "description": "正文格式；缺省为普通纯文本。", "enum": ["plain", "markdown"] },
+        "attachments": { "type": "array", "description": "已保存文件的元数据，不含字节，缺省为空。", "maxItems": 5, "items": { "type": "object", "description": "一份已保存附件。", "properties": {
+          "id": { "type": "string", "description": "附件 ID。", "minLength": 36, "maxLength": 36 },
+          "name": { "type": "string", "description": "显示与 MIME 使用的文件名。", "minLength": 1, "maxLength": 180 },
+          "bytes": { "type": "integer", "description": "文件字节数。", "minimum": 1, "maximum": 10485760 }
+        }, "required": ["id", "name", "bytes"], "additionalProperties": false } },
+        "updatedAt": { "type": "integer", "description": "最后保存时间（毫秒）。", "minimum": 0 }
+      }, "required": ["id", "accountId", "to", "subject", "body", "updatedAt"], "additionalProperties": false
+    },
+    "mailDraftSaveInput": {
+      "type": "object", "description": "保存未完成的邮件；省略 ID 时创建草稿。",
+      "properties": {
+        "id": { "type": "string", "description": "可选：现有草稿 ID。", "minLength": 1, "maxLength": 200 },
+        "accountId": { "type": "string", "description": "发信账号 ID；未选时为空。", "maxLength": 200 },
+        "to": { "type": "string", "description": "收件地址。", "maxLength": 254 },
+        "subject": { "type": "string", "description": "邮件主题。", "maxLength": 200 },
+        "body": { "type": "string", "description": "纯文本或 Markdown 源正文。", "maxLength": 20000 },
+        "format": { "type": "string", "description": "正文格式；省略则沿用旧格式，新草稿默认纯文本。", "enum": ["plain", "markdown"] },
+        "attachments": { "type": "array", "description": "保存后要保留的全部附件；省略则保留现有附件，空数组清除。", "maxItems": 5, "items": { "type": "object", "description": "现有附件或已完整上传的新附件。", "properties": {
+          "id": { "type": "string", "description": "当前草稿附件 ID 或当前身份的附件上传 ID。", "minLength": 36, "maxLength": 36 },
+          "name": { "type": "string", "description": "新附件的原始文件名；已有附件不改名。", "minLength": 1, "maxLength": 180 }
+        }, "required": ["id", "name"], "additionalProperties": false } },
+        "__requestId": { "type": "string", "description": "内部请求标识。", "maxLength": 200 },
+        "__owner": { "type": "string", "description": "内部调用方分组。", "maxLength": 200 }
+      }, "required": ["accountId", "to", "subject", "body"], "additionalProperties": false
+    },
+    "mailDraftInput": { "type": "object", "description": "按 ID 操作当前身份下的草稿。", "properties": { "id": { "type": "string", "description": "草稿 ID。", "minLength": 1, "maxLength": 200 }, "__requestId": { "type": "string", "description": "内部请求标识。", "maxLength": 200 }, "__owner": { "type": "string", "description": "内部调用方分组。", "maxLength": 200 } }, "required": ["id"], "additionalProperties": false },
+    "mailDraftListInput": { "type": "object", "description": "列出当前身份下的草稿，无业务参数。", "properties": { "__requestId": { "type": "string", "description": "内部请求标识。", "maxLength": 200 }, "__owner": { "type": "string", "description": "内部调用方分组。", "maxLength": 200 } }, "required": [], "additionalProperties": false },
+    "mailDraftList": {
+      "type": "array", "description": "草稿摘要，按保存时间倒序排列。", "maxItems": 100,
+      "items": { "type": "object", "description": "草稿摘要，不返回正文。", "properties": {
+        "id": { "type": "string", "description": "草稿 ID。", "minLength": 1, "maxLength": 200 },
+        "accountId": { "type": "string", "description": "发信账号 ID；未选时为空。", "maxLength": 200 },
+        "to": { "type": "string", "description": "收件地址。", "maxLength": 254 },
+        "subject": { "type": "string", "description": "邮件主题。", "maxLength": 200 },
+        "updatedAt": { "type": "integer", "description": "最后保存时间（毫秒）。", "minimum": 0 }
+      }, "required": ["id", "accountId", "to", "subject", "updatedAt"], "additionalProperties": false }
+    },
+    "mailDraftDeleteOutput": { "type": "object", "description": "草稿或暂存上传的删除结果。", "properties": { "deleted": { "type": "boolean", "description": "是否删除了记录。" } }, "required": ["deleted"], "additionalProperties": false },
+    "mailDraftUploadStartInput": { "type": "object", "description": "开启暂存上传；仅限当前身份，未提交时不改变草稿。", "properties": {
+      "kind": { "type": "string", "description": "附件字节或草稿保存 JSON 的 UTF-8 字节。", "enum": ["attachment", "snapshot"] },
+      "bytes": { "type": "integer", "description": "总字节数；附件最多 10 MiB，快照最多 128000 字节。", "minimum": 1, "maximum": 10485760 },
+      "__requestId": { "type": "string", "description": "内部请求标识。", "maxLength": 200 }
+    }, "required": ["kind", "bytes"], "additionalProperties": false },
+    "mailDraftUploadStartOutput": { "type": "object", "description": "新暂存上传的引用。", "properties": {
+      "uploadId": { "type": "string", "description": "服务器签发的暂存 ID。", "minLength": 36, "maxLength": 36 }
+    }, "required": ["uploadId"], "additionalProperties": false },
+    "mailDraftUploadChunkInput": { "type": "object", "description": "顺序追加上传数据。", "properties": {
+      "wire": { "type": "string", "description": "以感叹号分隔的同身份暂存 ID、base36 字节偏移、无填充 base64url 数据。", "minLength": 41, "maxLength": 262187 },
+      "__requestId": { "type": "string", "description": "内部请求标识。", "maxLength": 200 }
+    }, "required": ["wire"], "additionalProperties": false },
+    "mailDraftUploadChunkOutput": { "type": "object", "description": "上传进度。", "properties": {
+      "received": { "type": "integer", "description": "累计成功接收的字节数。", "minimum": 1, "maximum": 10485760 }
+    }, "required": ["received"], "additionalProperties": false },
+    "mailDraftUploadRef": { "type": "object", "description": "当前身份的暂存上传引用。", "properties": {
+      "uploadId": { "type": "string", "description": "服务器签发的暂存 ID。", "minLength": 36, "maxLength": 36 },
+      "__requestId": { "type": "string", "description": "内部请求标识。", "maxLength": 200 }
+    }, "required": ["uploadId"], "additionalProperties": false },
     "bilingualInput": {
       "type": "object",
       "description": "邮件整封正文翻译；源语言自动识别，仅超长正文分批，支持批次重试与续译。",
@@ -959,7 +1070,13 @@
       "properties": {
         "eventId": { "type": "string", "description": "事件唯一 ID。", "maxLength": 64 },
         "accountId": { "type": "string", "description": "账号 ID。", "maxLength": 64 },
-        "count": { "type": "integer", "description": "新到达邮件数。" }
+        "count": { "type": "integer", "description": "新到达邮件数。" },
+        "messageIds": {
+          "type": "array",
+          "description": "可选：本次仍为未读的新邮件 ID；客户端据此精确去重，合并前已读的邮件不会出现。",
+          "maxItems": 100,
+          "items": { "type": "string", "description": "邮件 ID。", "minLength": 1, "maxLength": 200 }
+        }
       },
       "required": ["eventId", "accountId", "count"],
       "additionalProperties": false
@@ -974,6 +1091,17 @@
         "read": { "type": "boolean", "description": "true=已读，false=未读。" }
       },
       "required": ["eventId", "accountId", "messageId", "read"],
+      "additionalProperties": false
+    },
+    "mailDeletedEvent": {
+      "type": "object",
+      "description": "收件箱邮件已移至服务器垃圾箱且本地缓存已移除。",
+      "properties": {
+        "eventId": { "type": "string", "description": "事件唯一 ID。", "maxLength": 64 },
+        "accountId": { "type": "string", "description": "账号 ID。", "maxLength": 64 },
+        "messageId": { "type": "string", "description": "已删除的收件箱邮件 ID。", "maxLength": 200 }
+      },
+      "required": ["eventId", "accountId", "messageId"],
       "additionalProperties": false
     },
     "translateProgressEvent": {
@@ -1047,6 +1175,7 @@
         "glossary": { "type": "array", "description": "术语表，最多 100 条；用于占位保护与 AI 提示。", "maxItems": 100, "items": { "type": "object", "description": "glossaryEntry 结构（见 glossaryEntry 模型）。", "properties": { "source": { "type": "string", "description": "原文术语。", "minLength": 1, "maxLength": 100 }, "target": { "type": "string", "description": "目标译法。", "minLength": 1, "maxLength": 200 } }, "required": ["source", "target"], "additionalProperties": false } },
         "logLevel": { "type": "string", "description": "日志级别 off/error/warn/info。", "maxLength": 10 },
         "syncReadReceipts": { "type": "boolean", "description": "是否把已读/未读标记回写到 IMAP 服务器；默认 false。" },
+        "mailBodyZoom": { "type": "number", "minimum": 20, "maximum": 200, "description": "邮件正文缩放百分比；默认 100。" },
         "notifications": { "type": "object", "description": "新邮件提醒设置；含免打扰时段与静音账号。", "properties": {
           "enabled": { "type": "boolean", "description": "是否推送新邮件提醒。" },
           "dndEnabled": { "type": "boolean", "description": "是否启用免打扰时段。" },
@@ -1146,6 +1275,7 @@
         "lastErrorAt": { "type": "number", "description": "可选：最近一次同步失败时间戳。" },
         "oldestCursor": { "type": "string", "description": "可选：继续向更早邮件翻页的服务器游标；缺省表示已到最早一封。", "maxLength": 10 },
         "exhausted": { "type": "boolean", "description": "可选：已确认服务器没有更早邮件；缺省时允许从本地缓存最旧邮件反推游标再检查一次。" },
+        "knownCount": { "type": "integer", "description": "可选：上次成功同步后该账号已见索引的条数；当前索引为 0 而该值大于 0 时判定索引缺失并按基线同步，避免旧邮件误报。", "minimum": 0 },
         "lastError": {
           "type": "object",
           "description": "可选：最近一次失败信息（errorInfo 结构）。",
@@ -1196,22 +1326,57 @@
     },
     "appearanceSettings": {
       "type": "object",
-      "description": "插件外观：跟随 Studio 或自定义字体、字号、圆角、控件高度、边框、间距、字距、强调色、背景压暗与模糊。",
+      "description": "插件外观：跟随 Studio，或自定义明暗模式、字体、排版、颜色、几何、区域玻璃与背景效果。",
       "properties": {
         "followStudio": { "type": "boolean", "description": "是否跟随 Ekko Studio 主题的字体与几何参数。" },
         "font": { "type": "string", "enum": ["comic", "system", "serif", "mono"], "description": "自定义字体方案；followStudio=true 时忽略。" },
+        "colorScheme": { "type": "string", "enum": ["light", "dark"], "description": "自定义明暗模式。" },
         "fontSize": { "type": "number", "minimum": 12, "maximum": 20, "description": "基础字号 px。" },
+        "lineHeight": { "type": "number", "minimum": 1, "maximum": 2.4, "description": "正文行高倍数。" },
         "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "全局圆角 px。" },
         "controlHeight": { "type": "number", "minimum": 30, "maximum": 56, "description": "控件高度 px。" },
         "borderWidth": { "type": "number", "minimum": 1, "maximum": 4, "description": "边框宽度 px。" },
         "spacing": { "type": "number", "minimum": 0.8, "maximum": 1.6, "description": "间距比例。" },
         "letterSpacing": { "type": "number", "minimum": -1.5, "maximum": 1.5, "description": "字间距 px。" },
+        "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "阴影强度 0-2。" },
+        "contentWidth": { "type": "number", "minimum": 480, "maximum": 1600, "description": "阅读正文最大宽度 px。" },
         "accent": { "type": "string", "minLength": 7, "maxLength": 7, "description": "强调色 #rrggbb。" },
+        "linkColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "链接颜色 #rrggbb。" },
+        "pageColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "页面底色 #rrggbb。" },
+        "surfaceColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "卡片与内容表面色 #rrggbb。" },
+        "textColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "正文颜色 #rrggbb。" },
+        "secondaryTextColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "次要文字颜色 #rrggbb。" },
+        "mutedTextColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "弱化文字颜色 #rrggbb。" },
+        "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "边框颜色 #rrggbb。" },
         "overlay": { "type": "number", "minimum": 0, "maximum": 0.85, "description": "背景压暗不透明度。" },
         "blur": { "type": "number", "minimum": 0, "maximum": 24, "description": "背景模糊 px。" },
-        "backgroundName": { "type": "string", "maxLength": 120, "description": "自定义背景文件名。" }
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "全局表面不透明度；省略时按各区域默认值。" },
+        "gradientColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "渐变终点色；省略表示不启用渐变。" },
+        "gradientAngle": { "type": "number", "minimum": 0, "maximum": 360, "description": "渐变角度（度）。" },
+        "backgroundSize": { "type": "string", "enum": ["cover", "contain", "auto"], "description": "背景图片显示方式。" },
+        "backgroundPosition": { "type": "string", "enum": ["center", "top", "bottom", "left", "right"], "description": "背景图片对齐位置。" },
+        "regions": { "type": "object", "description": "按区域覆盖背景色、边框、透明度、模糊、圆角与阴影；未设置项继承全局。", "properties": {
+          "chrome": { "type": "object", "description": "顶部与底部框架区域覆盖。", "properties": { "backgroundColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域背景色。" }, "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域边框色。" }, "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "区域背景不透明度。" }, "blur": { "type": "number", "minimum": 0, "maximum": 30, "description": "区域模糊 px。" }, "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "区域圆角 px。" }, "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "区域阴影强度。" } }, "required": [], "additionalProperties": false },
+          "sidebar": { "type": "object", "description": "侧栏区域覆盖。", "properties": { "backgroundColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域背景色。" }, "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域边框色。" }, "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "区域背景不透明度。" }, "blur": { "type": "number", "minimum": 0, "maximum": 30, "description": "区域模糊 px。" }, "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "区域圆角 px。" }, "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "区域阴影强度。" } }, "required": [], "additionalProperties": false },
+          "content": { "type": "object", "description": "内容区覆盖。", "properties": { "backgroundColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域背景色。" }, "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域边框色。" }, "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "区域背景不透明度。" }, "blur": { "type": "number", "minimum": 0, "maximum": 30, "description": "区域模糊 px。" }, "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "区域圆角 px。" }, "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "区域阴影强度。" } }, "required": [], "additionalProperties": false },
+          "card": { "type": "object", "description": "卡片区域覆盖。", "properties": { "backgroundColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域背景色。" }, "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域边框色。" }, "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "区域背景不透明度。" }, "blur": { "type": "number", "minimum": 0, "maximum": 30, "description": "区域模糊 px。" }, "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "区域圆角 px。" }, "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "区域阴影强度。" } }, "required": [], "additionalProperties": false },
+          "input": { "type": "object", "description": "输入框区域覆盖。", "properties": { "backgroundColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域背景色。" }, "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域边框色。" }, "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "区域背景不透明度。" }, "blur": { "type": "number", "minimum": 0, "maximum": 30, "description": "区域模糊 px。" }, "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "区域圆角 px。" }, "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "区域阴影强度。" } }, "required": [], "additionalProperties": false },
+          "overlay": { "type": "object", "description": "浮层与弹层区域覆盖。", "properties": { "backgroundColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域背景色。" }, "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域边框色。" }, "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "区域背景不透明度。" }, "blur": { "type": "number", "minimum": 0, "maximum": 30, "description": "区域模糊 px。" }, "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "区域圆角 px。" }, "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "区域阴影强度。" } }, "required": [], "additionalProperties": false }
+        }, "required": [], "additionalProperties": false },
+        "backgroundName": { "type": "string", "maxLength": 120, "description": "自定义 Web/桌面背景文件名。" },
+        "backgroundMobileName": { "type": "string", "maxLength": 120, "description": "自定义移动端背景文件名；为空时移动端回退使用 Web 背景。" }
       },
       "required": ["followStudio", "font", "fontSize", "radius", "controlHeight", "borderWidth", "spacing", "letterSpacing", "accent", "overlay", "blur", "backgroundName"],
+      "additionalProperties": false
+    },
+    "appearanceUpdatedEvent": {
+      "type": "object",
+      "description": "外观设置或自定义背景已更新；广播给本插件所有页面，让其他 iframe 立即重载外观。",
+      "properties": {
+        "eventId": { "type": "string", "maxLength": 80, "description": "事件去重标识。" },
+        "updatedAt": { "type": "number", "description": "本次外观更新时间毫秒时间戳。" }
+      },
+      "required": ["eventId", "updatedAt"],
       "additionalProperties": false
     },
     "storedDataUrl": {
@@ -1230,20 +1395,55 @@
     },
     "appearanceSaveInput": {
       "type": "object",
-      "description": "保存外观设置；__requestId 为客户端调用信封字段。",
+      "description": "以紧凑 v1 编码保存全部可编辑外观设置，兼容移动 App 标题桥。背景文件名由服务端保留。",
+      "properties": {
+        "wire": { "type": "string", "minLength": 1, "maxLength": 400, "description": "固定顺序 v1 外观快照：版本、布尔和枚举索引、百分位整数 base36、三字节 RGB base64url 及各区域覆盖；感叹号分隔，空字段表示未设覆盖。" },
+        "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：客户端请求标识。" }
+      },
+      "required": ["wire"],
+      "additionalProperties": false
+    },
+    "appearanceSaveLegacyInput": {
+      "type": "object",
+      "description": "旧版客户端使用的逐字段外观保存对象；不与紧凑输入混用。",
       "properties": {
         "followStudio": { "type": "boolean", "description": "是否跟随 Ekko Studio 主题。" },
         "font": { "type": "string", "enum": ["comic", "system", "serif", "mono"], "description": "自定义字体方案。" },
+        "colorScheme": { "type": "string", "enum": ["light", "dark"], "description": "自定义明暗模式。" },
         "fontSize": { "type": "number", "minimum": 12, "maximum": 20, "description": "基础字号 px。" },
+        "lineHeight": { "type": "number", "minimum": 1, "maximum": 2.4, "description": "正文行高倍数。" },
         "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "全局圆角 px。" },
         "controlHeight": { "type": "number", "minimum": 30, "maximum": 56, "description": "控件高度 px。" },
         "borderWidth": { "type": "number", "minimum": 1, "maximum": 4, "description": "边框宽度 px。" },
         "spacing": { "type": "number", "minimum": 0.8, "maximum": 1.6, "description": "间距比例。" },
         "letterSpacing": { "type": "number", "minimum": -1.5, "maximum": 1.5, "description": "字间距 px。" },
+        "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "阴影强度 0-2。" },
+        "contentWidth": { "type": "number", "minimum": 480, "maximum": 1600, "description": "阅读正文最大宽度 px。" },
         "accent": { "type": "string", "minLength": 7, "maxLength": 7, "description": "强调色 #rrggbb。" },
+        "linkColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "链接颜色 #rrggbb。" },
+        "pageColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "页面底色 #rrggbb。" },
+        "surfaceColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "卡片与内容表面色 #rrggbb。" },
+        "textColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "正文颜色 #rrggbb。" },
+        "secondaryTextColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "次要文字颜色 #rrggbb。" },
+        "mutedTextColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "弱化文字颜色 #rrggbb。" },
+        "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "边框颜色 #rrggbb。" },
         "overlay": { "type": "number", "minimum": 0, "maximum": 0.85, "description": "背景压暗不透明度。" },
         "blur": { "type": "number", "minimum": 0, "maximum": 24, "description": "背景模糊 px。" },
-        "backgroundName": { "type": "string", "maxLength": 120, "description": "背景文件名。" },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "全局表面不透明度；省略时按各区域默认值。" },
+        "gradientColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "渐变终点色；省略表示不启用渐变。" },
+        "gradientAngle": { "type": "number", "minimum": 0, "maximum": 360, "description": "渐变角度（度）。" },
+        "backgroundSize": { "type": "string", "enum": ["cover", "contain", "auto"], "description": "背景图片显示方式。" },
+        "backgroundPosition": { "type": "string", "enum": ["center", "top", "bottom", "left", "right"], "description": "背景图片对齐位置。" },
+        "regions": { "type": "object", "description": "按区域覆盖背景色、边框、透明度、模糊、圆角与阴影；未设置项继承全局。", "properties": {
+          "chrome": { "type": "object", "description": "顶部与底部框架区域覆盖。", "properties": { "backgroundColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域背景色。" }, "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域边框色。" }, "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "区域背景不透明度。" }, "blur": { "type": "number", "minimum": 0, "maximum": 30, "description": "区域模糊 px。" }, "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "区域圆角 px。" }, "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "区域阴影强度。" } }, "required": [], "additionalProperties": false },
+          "sidebar": { "type": "object", "description": "侧栏区域覆盖。", "properties": { "backgroundColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域背景色。" }, "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域边框色。" }, "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "区域背景不透明度。" }, "blur": { "type": "number", "minimum": 0, "maximum": 30, "description": "区域模糊 px。" }, "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "区域圆角 px。" }, "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "区域阴影强度。" } }, "required": [], "additionalProperties": false },
+          "content": { "type": "object", "description": "内容区覆盖。", "properties": { "backgroundColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域背景色。" }, "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域边框色。" }, "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "区域背景不透明度。" }, "blur": { "type": "number", "minimum": 0, "maximum": 30, "description": "区域模糊 px。" }, "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "区域圆角 px。" }, "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "区域阴影强度。" } }, "required": [], "additionalProperties": false },
+          "card": { "type": "object", "description": "卡片区域覆盖。", "properties": { "backgroundColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域背景色。" }, "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域边框色。" }, "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "区域背景不透明度。" }, "blur": { "type": "number", "minimum": 0, "maximum": 30, "description": "区域模糊 px。" }, "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "区域圆角 px。" }, "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "区域阴影强度。" } }, "required": [], "additionalProperties": false },
+          "input": { "type": "object", "description": "输入框区域覆盖。", "properties": { "backgroundColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域背景色。" }, "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域边框色。" }, "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "区域背景不透明度。" }, "blur": { "type": "number", "minimum": 0, "maximum": 30, "description": "区域模糊 px。" }, "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "区域圆角 px。" }, "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "区域阴影强度。" } }, "required": [], "additionalProperties": false },
+          "overlay": { "type": "object", "description": "浮层与弹层区域覆盖。", "properties": { "backgroundColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域背景色。" }, "borderColor": { "type": "string", "minLength": 7, "maxLength": 7, "description": "区域边框色。" }, "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "区域背景不透明度。" }, "blur": { "type": "number", "minimum": 0, "maximum": 30, "description": "区域模糊 px。" }, "radius": { "type": "number", "minimum": 0, "maximum": 32, "description": "区域圆角 px。" }, "shadow": { "type": "number", "minimum": 0, "maximum": 2, "description": "区域阴影强度。" } }, "required": [], "additionalProperties": false }
+        }, "required": [], "additionalProperties": false },
+        "backgroundName": { "type": "string", "maxLength": 120, "description": "Web/桌面背景文件名。" },
+        "backgroundMobileName": { "type": "string", "maxLength": 120, "description": "移动端背景文件名；省略时保留已有文件名。" },
         "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：客户端请求标识。" }
       },
       "required": ["followStudio", "font", "fontSize", "radius", "controlHeight", "borderWidth", "spacing", "letterSpacing", "accent", "overlay", "blur", "backgroundName"],
@@ -1254,10 +1454,14 @@
       "description": "当前外观；背景以文件保存，读取时按块传回。",
       "properties": {
         "settings": { "type": "object", "description": "外观设置（字段见 appearanceSettings）。", "properties": {}, "required": [], "additionalProperties": true },
-        "hasBackground": { "type": "boolean", "description": "是否已有自定义背景。" },
-        "backgroundName": { "type": "string", "maxLength": 120, "description": "背景文件名。" },
-        "backgroundMime": { "type": "string", "maxLength": 40, "description": "背景 MIME 类型。" },
-        "backgroundBytes": { "type": "number", "description": "背景文件字节数。" },
+        "hasBackground": { "type": "boolean", "description": "是否已有自定义 Web/桌面背景。" },
+        "backgroundName": { "type": "string", "maxLength": 120, "description": "Web/桌面背景文件名。" },
+        "backgroundMime": { "type": "string", "maxLength": 40, "description": "Web/桌面背景 MIME 类型。" },
+        "backgroundBytes": { "type": "number", "description": "Web/桌面背景文件字节数。" },
+        "hasMobileBackground": { "type": "boolean", "description": "是否已有独立移动端背景。" },
+        "mobileBackgroundName": { "type": "string", "maxLength": 120, "description": "移动端背景文件名。" },
+        "mobileBackgroundMime": { "type": "string", "maxLength": 40, "description": "移动端背景 MIME 类型。" },
+        "mobileBackgroundBytes": { "type": "number", "description": "移动端背景文件字节数。" },
         "updatedAt": { "type": "number", "description": "最近一次外观修改时间戳。" }
       },
       "required": ["settings", "hasBackground", "updatedAt"],
@@ -1288,6 +1492,7 @@
       "properties": {
         "name": { "type": "string", "minLength": 1, "maxLength": 120, "description": "文件名。" },
         "mime": { "type": "string", "enum": ["image/jpeg", "image/png", "image/webp"], "description": "图片类型。" },
+        "slot": { "type": "string", "enum": ["desktop", "mobile"], "description": "背景槽位；省略时按 desktop 处理以兼容旧客户端。" },
         "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }
       },
       "required": ["name", "mime"],
@@ -1325,6 +1530,7 @@
         "uploadId": { "type": "string", "maxLength": 64, "description": "上传会话 ID。" },
         "name": { "type": "string", "maxLength": 120, "description": "文件名。" },
         "mime": { "type": "string", "enum": ["image/jpeg", "image/png", "image/webp"], "description": "图片类型。" },
+        "slot": { "type": "string", "enum": ["desktop", "mobile"], "description": "背景槽位；省略时按 desktop 处理。" },
         "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }
       },
       "required": ["uploadId", "name", "mime"],
@@ -1347,6 +1553,7 @@
       "properties": {
         "offset": { "type": "number", "minimum": 0, "description": "字节偏移。" },
         "length": { "type": "number", "minimum": 1, "maximum": 700000, "description": "可选读取字节数。" },
+        "slot": { "type": "string", "enum": ["desktop", "mobile"], "description": "背景槽位；省略时按 desktop 处理。" },
         "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }
       },
       "required": ["offset"],
@@ -1361,6 +1568,16 @@
         "eof": { "type": "boolean", "description": "是否已到文件末尾。" }
       },
       "required": ["data", "nextOffset", "eof"],
+      "additionalProperties": false
+    },
+    "appearanceBackgroundSlotInput": {
+      "type": "object",
+      "description": "按槽位清除自定义背景。",
+      "properties": {
+        "slot": { "type": "string", "enum": ["desktop", "mobile"], "description": "背景槽位；省略时按 desktop 处理。" },
+        "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }
+      },
+      "required": [],
       "additionalProperties": false
     },
     "appearanceClearOutput": {
@@ -1389,6 +1606,7 @@
     "rssFolderInput": { "type": "object", "description": "新建或删除阅读分组。", "properties": { "name": { "type": "string", "maxLength": 30, "description": "分组名称。" }, "id": { "type": "string", "description": "分组 ID。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": [], "additionalProperties": false },
     "rssFeedAddInput": { "type": "object", "description": "添加订阅。", "properties": { "url": { "type": "string", "maxLength": 2000, "description": "订阅地址。" }, "folderId": { "type": "string", "description": "目标分组 ID。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": ["url"], "additionalProperties": false },
     "rssFeedMoveInput": { "type": "object", "description": "把订阅源移动到分组或移出分组。", "properties": { "id": { "type": "string", "description": "订阅源 ID。" }, "folderId": { "type": "string", "description": "目标分组 ID；省略表示未分组。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": ["id"], "additionalProperties": false },
+    "rssFeedRenameInput": { "type": "object", "description": "修改订阅源的本地显示名称，不改变订阅地址或刷新结果。", "properties": { "id": { "type": "string", "description": "订阅源 ID。" }, "title": { "type": "string", "minLength": 1, "maxLength": 120, "description": "新的订阅源名称。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": ["id", "title"], "additionalProperties": false },
     "rssReorderInput": { "type": "object", "description": "保存分组或订阅源的拖拽排序。", "properties": { "ids": { "type": "array", "maxItems": 2000, "description": "按显示顺序排列的 ID。", "items": { "type": "string", "maxLength": 64, "description": "分组或订阅源 ID。" } }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": ["ids"], "additionalProperties": false },
     "rssIdInput": { "type": "object", "description": "按 ID 操作订阅或文章。", "properties": { "id": { "type": "string", "description": "目标 ID。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": ["id"], "additionalProperties": false },
     "rssRefreshInput": { "type": "object", "description": "刷新全部或单个订阅。", "properties": { "id": { "type": "string", "description": "订阅源 ID；省略表示全部。" }, "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }, "__owner": { "type": "string", "maxLength": 200, "description": "内部字段：调用方分组。" } }, "required": [], "additionalProperties": false },
@@ -1409,7 +1627,26 @@
     "rssImportOutput": { "type": "object", "description": "OPML 导入结果。", "properties": { "imported": { "type": "number", "minimum": 0, "description": "导入数。" }, "skipped": { "type": "number", "minimum": 0, "description": "跳过数。" } }, "required": ["imported", "skipped"], "additionalProperties": false },
     "rssOkOutput": { "type": "object", "description": "文章状态写入结果。", "properties": { "ok": { "type": "boolean", "description": "是否成功。" } }, "required": ["ok"], "additionalProperties": false },
     "rssRemovedOutput": { "type": "object", "description": "删除结果。", "properties": { "removed": { "type": "boolean", "description": "是否已删除。" } }, "required": ["removed"], "additionalProperties": false },
-    "rssUpdatedEvent": { "type": "object", "description": "后台抓取发现新文章的事件。", "properties": { "newCount": { "type": "number", "minimum": 0, "description": "新增文章数。" }, "at": { "type": "number", "description": "事件时间。" } }, "required": ["newCount", "at"], "additionalProperties": false }
+    "rssUpdatedEvent": { "type": "object", "description": "后台抓取发现新文章的事件。", "properties": { "newCount": { "type": "number", "minimum": 0, "description": "新增文章数。" }, "at": { "type": "number", "description": "事件时间。" } }, "required": ["newCount", "at"], "additionalProperties": false },
+    "mediaImageInput": {
+      "type": "object",
+      "description": "代理加载远程 favicon 或配图，避免移动端 WebView 直接请求外链图片。",
+      "properties": {
+        "url": { "type": "string", "minLength": 1, "maxLength": 2048, "description": "公网 http(s) 图片地址。" },
+        "__requestId": { "type": "string", "maxLength": 200, "description": "内部字段：请求标识。" }
+      },
+      "required": ["url"],
+      "additionalProperties": false
+    },
+    "mediaImageOutput": {
+      "type": "object",
+      "description": "远程图片的 data URL；地址不合法、超限或加载失败时返回空字符串。",
+      "properties": {
+        "data": { "type": "string", "maxLength": 600000, "description": "data URL；失败时为空字符串。" }
+      },
+      "required": ["data"],
+      "additionalProperties": false
+    }
   },
   "rpc": {
     "app.bootstrap": { "description": "首屏数据：Provider 概览、账号、语言表与 vault 提示。", "input": "requestIdOnly", "output": "bootstrapOutput" },
@@ -1424,22 +1661,35 @@
     "settings.get": { "description": "回显设置；密钥只回传 configured，不回明文。", "input": "requestIdOnly", "output": "settingsGetOutput" },
     "settings.save": { "description": "保存偏好与百度凭据；secret 经一次 RPC 进入加密 vault。", "input": "settingsSaveInput", "output": "settingsSaveOutput" },
     "appearance.get": { "description": "读取插件外观设置与自定义背景。", "input": "requestIdOnly", "output": "appearanceOutput" },
-    "appearance.save": { "description": "保存插件外观设置。", "input": "appearanceSaveInput", "output": "appearanceSaveOutput" },
+    "appearance.save": { "description": "保存插件外观设置；兼容仍在运行的旧版客户端 appearanceSaveLegacyInput。", "input": "appearanceSaveInput", "output": "appearanceSaveOutput" },
     "appearance.background-start": { "description": "开始分块上传自定义背景原图。", "input": "appearanceBackgroundStartInput", "output": "appearanceBackgroundStartOutput" },
     "appearance.background-chunk": { "description": "追加一段背景原图 base64 数据。", "input": "appearanceBackgroundChunkInput", "output": "appearanceBackgroundChunkOutput" },
     "appearance.background-complete": { "description": "校验并原子保存背景原图。", "input": "appearanceBackgroundCompleteInput", "output": "appearanceBackgroundCompleteOutput" },
     "appearance.background-read": { "description": "按字节偏移分块读取背景原图。", "input": "appearanceBackgroundReadInput", "output": "appearanceBackgroundReadOutput" },
-    "appearance.background-clear": { "description": "清除自定义背景，恢复内置主题图。", "input": "requestIdOnly", "output": "appearanceClearOutput" },
+    "appearance.background-clear": { "description": "清除指定槽位的自定义背景；移动端无图时继续回退 Web 背景。", "input": "appearanceBackgroundSlotInput", "output": "appearanceClearOutput" },
     "appearance.reset": { "description": "恢复默认外观并清除自定义背景。", "input": "requestIdOnly", "output": "appearanceResetOutput" },
     "mail.account.add": { "description": "添加账号并即时测试连接；secret 立即加密入 vault。", "input": "addAccountInput", "output": "account" },
+    "mail.account.rename": { "description": "修改账号展示别名；只写本地账号记录，不重测连接。", "input": "mailAccountRenameInput", "output": "account" },
     "mail.account.remove": { "description": "移除账号并清除 vault 条目、缓存与标记。", "input": "accountIdInput", "output": "removeAccountOutput" },
     "mail.account.test": { "description": "测试账号连接，刷新连接状态。", "input": "accountIdInput", "output": "connectionState" },
     "mail.list": { "description": "统一收件箱分页：默认只读本地缓存；refresh=true 时先同步 IMAP，滚动超过本地缓存才拉取更早邮件。", "input": "mailListInput", "output": "mailPage" },
     "mail.get": { "description": "取单封详情；正文已服务端清洗，待客户端复检与 sandbox iframe。", "input": "mailGetInput", "output": "mailMessage" },
+    "mail.unread-status": { "description": "只读本地邮件状态，过滤切换页面后重放的已读邮件提醒。", "input": "mailUnreadStatusInput", "output": "mailUnreadStatusOutput" },
     "mail.image-domains": { "description": "列出该封邮件的远程图片域名供确认。", "input": "mailGetInput", "output": "imageDomainsOutput" },
     "mail.images": { "description": "按本封邮件的实际域名白名单逐张加载远程图片。", "input": "imagesInput", "output": "mailMessage" },
+    "media.image": { "description": "服务端代取公网 favicon 或文章配图并回传 data URL；仅允许 http(s)，失败时返回空字符串。", "input": "mediaImageInput", "output": "mediaImageOutput" },
     "mail.attachment": { "description": "下载附件（base64）；危险类型与超限始终拒绝。", "input": "mailAttachmentInput", "output": "mailAttachmentOutput" },
     "mail.reply": { "description": "通过账号对应的 SMTP 服务器直接回复邮件；收件人与 In-Reply-To 取自原邮件。", "input": "mailReplyInput", "output": "mailReplyOutput" },
+    "mail.draft.list": { "description": "列出当前身份下的本机草稿摘要。", "input": "mailDraftListInput", "output": "mailDraftList" },
+    "mail.draft.get": { "description": "读取一份本机草稿及其正文。", "input": "mailDraftInput", "output": "mailDraft" },
+    "mail.draft.save": { "description": "新建或更新一份本机草稿，不发送邮件。", "input": "mailDraftSaveInput", "output": "mailDraft" },
+    "mail.draft.upload-start": { "description": "为附件或草稿快照预留有界的内存暂存。", "input": "mailDraftUploadStartInput", "output": "mailDraftUploadStartOutput" },
+    "mail.draft.upload-chunk": { "description": "追加一段草稿上传数据。", "input": "mailDraftUploadChunkInput", "output": "mailDraftUploadChunkOutput" },
+    "mail.draft.upload-drop": { "description": "释放尚未提交的草稿上传。", "input": "mailDraftUploadRef", "output": "mailDraftDeleteOutput" },
+    "mail.draft.commit": { "description": "校验并保存已完整暂存的草稿保存 JSON。", "input": "mailDraftUploadRef", "output": "mailDraft" },
+    "mail.draft.delete": { "description": "删除一份本机草稿。", "input": "mailDraftInput", "output": "mailDraftDeleteOutput" },
+    "mail.delete": { "description": "将指定收件箱邮件移至 IMAP 垃圾箱；不直接永久删除。", "input": "mailDeleteInput", "output": "mailDeleteOutput" },
+    "mail.send": { "description": "通过草稿指定账号的 SMTP 提交邮件，可带 HTML 替代正文和 MIME 附件；接受后清除草稿，不自动重试。", "input": "mailDraftInput", "output": "mailReplyOutput" },
     "mail.mark-read": { "description": "已读/未读标记；默认只写本机，开启服务器回写后同步 IMAP \\Seen。", "input": "markReadInput", "output": "markReadOutput" },
     "mail.mark-all-read": { "description": "把已缓存邮件全部标为已读；开启服务器回写后同步 IMAP \\Seen。", "input": "markAllReadInput", "output": "markAllReadOutput" },
     "mail.bilingual": { "description": "整封正文翻译；源语言自动识别，仅超长文本按自然边界分批，支持批次重试与续译。", "input": "bilingualInput", "output": "bilingualBody" },
@@ -1449,6 +1699,7 @@
     "rss.folder.reorder": { "description": "保存分组排序。", "input": "rssReorderInput", "output": "rssOkOutput" },
     "rss.feed.add": { "description": "添加 RSS/Atom/JSON Feed 订阅并立即抓取首屏文章。", "input": "rssFeedAddInput", "output": "rssFeedOutput" },
     "rss.feed.move": { "description": "把订阅源移动到指定分组；省略 folderId 时移到未分组。", "input": "rssFeedMoveInput", "output": "rssOkOutput" },
+    "rss.feed.rename": { "description": "修改订阅源显示名称；后续刷新不会覆盖自定义名称。", "input": "rssFeedRenameInput", "output": "rssFeedOutput" },
     "rss.feed.reorder": { "description": "保存订阅源排序。", "input": "rssReorderInput", "output": "rssOkOutput" },
     "rss.feed.remove": { "description": "删除订阅源及其本地文章。", "input": "rssIdInput", "output": "rssRemovedOutput" },
     "rss.feed.refresh": { "description": "立即刷新指定订阅源或全部启用的订阅源。", "input": "rssRefreshInput", "output": "rssRefreshOutput" },
@@ -1472,10 +1723,13 @@
     "account.state": { "description": "账号连接状态变化（connecting/connected/auth_failed/offline），eventId 供去重。", "model": "accountStateEvent", "audience": "plugin" },
     "mail.arrived": { "description": "某账号发现从未记录过的新邮件；首次同步与 UIDVALIDITY 重建不发通知。", "model": "mailArrivedEvent", "audience": "plugin" },
     "mail.read": { "description": "单封邮件已读状态写入本地缓存，供多个界面同步。", "model": "mailReadEvent", "audience": "plugin" },
+    "mail.deleted": { "description": "移除指定账号和邮件 ID 对应的收件箱记录，供多个界面同步。", "model": "mailDeletedEvent", "audience": "plugin" },
     "translate.progress": { "description": "整封邮件翻译批次进度，含刚完成的批次。", "model": "translateProgressEvent", "audience": "plugin" },
-    "rss.updated": { "description": "后台 RSS 抓取发现新文章时推送新增数量。", "model": "rssUpdatedEvent", "audience": "plugin" }
+    "rss.updated": { "description": "后台 RSS 抓取发现新文章时推送新增数量。", "model": "rssUpdatedEvent", "audience": "plugin" },
+    "appearance.updated": { "description": "外观设置或自定义背景已更新，广播给本插件所有页面以立即重载。", "model": "appearanceUpdatedEvent", "audience": "plugin" }
   },
   "storage": {
+    "mail-draft": { "description": "本机 SQLite drafts 与 draft_attachments 表的草稿元数据；附件字节单独存为 BLOB。每身份至多 100 份草稿。", "model": "mailDraft", "version": 2, "scope": "users/{userId}/profiles/{profile}" },
     "accounts": { "description": "账号元数据（不含 secret；授权码在 vault.bin 加密）。", "model": "accountList", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
     "mail-cache": { "description": "所有已拉取邮件的摘要缓存，≤20000 条且单值 ≤1.9MB；列表、搜索与未读统计的唯一数据源。", "model": "mailSummaryList", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
     "mail-sync": { "description": "按账号的同步状态映射 accountId→mailSyncState：首次同步、上次成功时间与更早邮件游标。", "model": "mailSyncMap", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
@@ -1488,12 +1742,13 @@
     "images": { "description": "已确认加载的远程图片缓存（URL→dataURL）。", "model": "imageMap", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
     "appearance": { "description": "插件外观设置；默认跟随 Studio，可覆盖字体、几何、强调色与背景效果。", "model": "appearanceSettings", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
     "appearance-bg-meta": { "description": "自定义背景文件元数据；图片正文保存在 paths.dataDir/appearance。", "model": "appearanceBackgroundMeta", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "appearance-bg-mobile-meta": { "description": "移动端自定义背景元数据；图片正文保存在 paths.dataDir/appearance。", "model": "appearanceBackgroundMeta", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
     "appearance-bg": { "description": "旧版自定义背景 data URL，仅用于一次性迁移。", "model": "storedDataUrl", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
     "appearance-bg-name": { "description": "旧版自定义背景原文件名，仅用于迁移。", "model": "appearanceBackgroundName", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
     "appearance-updated": { "description": "最近一次外观修改时间戳。", "model": "storedTimestamp", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
     "preferences": { "description": "用户偏好：Provider、划词开关、模型名、OpenAI 兼容配置、术语表、日志级别。", "model": "preferencesModel", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
-    "history": { "description": "翻译历史，≤50 条。", "model": "translationJobList", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
-    "translate-cache": { "description": "翻译结果缓存，≤100 条/512KB，命中时跳过供应商请求。", "model": "translationCacheMap", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "history": { "description": "翻译历史（用户可见业务记录），≤50 条；翻译页与邮件双语共享，写入串行追加以避免并发覆盖。", "model": "translationJobList", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
+    "translate-cache": { "description": "翻译结果派生缓存，≤100 条/512KB；命中时跳过供应商请求，丢失后可重建，读写串行化。", "model": "translationCacheMap", "version": 1, "scope": "users/{userId}/profiles/{profile}" },
     "settings": { "description": "v0.3.0 旧版设置键（只读迁移源；secret 已迁 vault）。", "model": "legacySettings", "version": 1, "scope": "legacy/{userId}/{profile}" }
   },
   "checkpoints": {}

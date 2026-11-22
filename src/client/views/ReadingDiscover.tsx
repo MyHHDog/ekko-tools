@@ -7,6 +7,7 @@ import {
 } from '../../shared/feed-catalog';
 import { call, readable } from '../rpc-client';
 import { Icon } from '../components/States';
+import { Select } from '../components/Select';
 import { t, tFormat } from '../i18n';
 
 function categoryName(id: FeedCategoryId) {
@@ -66,10 +67,10 @@ export function ReadingDiscover({ ctx, feeds, folders, defaultFolderId, onClose,
       <div className="field"><Icon name="search" sm/><input type="search" value={query} aria-label={t('搜索订阅源')}
         placeholder={t('搜索订阅源')} onChange={event => setQuery(event.target.value)}/></div>
       {folders.length > 0 && <label className="reading-discover-folder"><span>{t('订阅到')}</span>
-        <select value={folderId} aria-label={t('订阅到')} onChange={event => setFolderId(event.target.value)}>
-          <option value="">{t('不分组')}</option>
-          {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-        </select></label>}
+        <Select value={folderId} label={t('订阅到')} onChange={setFolderId} options={[
+          {value:'',label:t('不分组')},
+          ...folders.map(folder=>({value:folder.id,label:folder.name})),
+        ]}/></label>}
     </div>
     <div className="reading-discover-cats" role="tablist" aria-label={t('订阅分类')}>
       <button role="tab" aria-selected={category === 'all'} className={category === 'all' ? 'active' : ''}

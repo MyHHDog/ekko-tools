@@ -80,7 +80,7 @@ export function createHarness(
         signal: callController.signal,
         state: { plugin: storage },
         host: host.host,
-        messages: { emit: (type, data) => events.push({ type, data }) },
+        messages: { emit: (type, data, options) => events.push({ type, data, options }) },
       };
       return Promise.resolve().then(() => handler(input, run)).finally(() => callController.abort());
     },

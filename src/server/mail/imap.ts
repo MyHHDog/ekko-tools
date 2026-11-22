@@ -11,7 +11,7 @@ import type {Factory,Entry} from './imap-pool';
 export class ImapConnector implements Connector {
   private pool:ImapPool;
   private snapshots=new Map<string,{validity:string;next:number}>();
-  constructor(private lifecycle:Lifecycle,private timeoutMs:number,private factory:Factory=o=>new ImapFlow(o)){this.pool=new ImapPool(lifecycle,timeoutMs,factory);}
+  constructor(private lifecycle:Lifecycle,private timeoutMs:number,private factory:Factory=o=>new ImapFlow(o)){this.pool=new ImapPool(lifecycle,factory);}
   private async session<T>(acc:Credentials,signal:AbortSignal,fn:(client:ImapFlow)=>Promise<T>,readOnly=true):Promise<T>{
     const {provider,address}=acc.account, endpoint=serverEndpoint(acc.account,'imap');
     const poolId=acc.account.id+(readOnly?'':':rw');
@@ -19,7 +19,7 @@ export class ImapConnector implements Connector {
     const options={host:endpoint.host,port:endpoint.port,secure:endpoint.secure,doSTARTTLS:endpoint.secure?undefined:true,tls:{rejectUnauthorized:true,minVersion:'TLSv1.2'},
       auth:{user:acc.account.username||address,pass:acc.secret,loginMethod:'LOGIN'},logger:false,logRaw:false,emitLogs:false,disableAutoIdle:true,
       disableAutoEnable:true,disableCompression:true,disableBinary:true,clientInfo:{name:'ekko-tools',version:'0.1.1'},
-      connectionTimeout:this.timeoutMs,greetingTimeout:this.timeoutMs,socketTimeout:this.timeoutMs} as ConstructorParameters<typeof ImapFlow>[0];
+      connectionTimeout:this.timeoutMs,greetingTimeout:this.timeoutMs,socketTimeout:Math.max(this.timeoutMs,120000)} as ConstructorParameters<typeof ImapFlow>[0];
     signal.addEventListener('abort',abort,{once:true});
     try {
       if(signal.aborted)throw new AppError('TIMEOUT',true);
@@ -29,13 +29,14 @@ export class ImapConnector implements Connector {
       const value=await fn(client);if(entry.error)throw new AppError(entry.error.code,entry.error.retryable,entry.error.category);return value;
     } catch(error) {
       const e=error as {authenticationFailed?:boolean;responseStatus?:string;message?:string;responseText?:string;response?:unknown};
-      this.pool.close(poolId);
       let response='';try{response=JSON.stringify(e.response||{});}catch{/* 忽略不可序列化的服务端响应。 */}
       const detail=`${e.message||''} ${e.responseText||''} ${response}`.toLowerCase();
-      if(e.authenticationFailed||(e.responseStatus==='NO'&&/(auth|login|password|credential|unsafe|denied|授权|登录)/.test(detail)))
+      const authFailed=e.authenticationFailed||(e.responseStatus==='NO'&&/(auth|login|password|credential|unsafe|denied|授权|登录)/.test(detail));
+      if(authFailed||entry?.client.usable===false)this.pool.close(poolId);
+      if(authFailed)
         throw new AppError(provider==='gmail'?'AUTH_REQUIRED_APP_PASSWORD':'AUTH_FAILED');
       throw error;
-    } finally {signal.removeEventListener('abort',abort);if(entry)this.pool.idle(poolId,entry);if(options.auth)options.auth.pass='';acc.secret='';}
+    } finally {signal.removeEventListener('abort',abort);if(entry)this.pool.release(poolId,entry);if(options.auth)options.auth.pass='';acc.secret='';}
   }
   async test(acc:Credentials,signal:AbortSignal) {
     const secret=acc.secret;
@@ -46,16 +47,16 @@ export class ImapConnector implements Connector {
   async list(acc:Credentials,q:{cursor?:string;limit:number},signal:AbortSignal){
     return this.session(acc,signal,async client=>{
       const box=client.mailbox;assert(box,'PROVIDER_BAD_RESPONSE');
-      const validity=String(box.uidValidity), previous=this.snapshots.get(acc.account.id);
+      const validity=String(box.uidValidity), next=box.uidNext, previous=this.snapshots.get(acc.account.id);
       const reset=Boolean(previous&&previous.validity!==validity), items:MailSummary[]=[];
       const end=q.cursor?Math.min(Number(q.cursor),box.exists):box.exists;
       assert(Number.isInteger(end)&&end>=0);
       if(!end)return {items,reset};
       const start=Math.max(1,end-q.limit+1);
-      const incremental=!q.cursor&&previous&&!reset&&previous.next<=box.uidNext;
+      const incremental=!q.cursor&&previous&&!reset&&previous.next<=next;
       const nextCursor=start>1?String(start-1):undefined;
-      if(incremental&&previous.next===box.uidNext)return {items,reset,nextCursor};
-      const range=incremental?`${previous.next}:${box.uidNext-1}`:`${start}:${end}`;
+      if(incremental&&previous.next===next)return {items,reset,nextCursor};
+      const range=incremental?`${previous.next}:${next-1}`:`${start}:${end}`;
       for await(const mail of client.fetch(range,{uid:true,envelope:true,flags:true,bodyStructure:true},{uid:!!incremental})){
         if(signal.aborted)throw new AppError('TIMEOUT',true);
         const env=mail.envelope;
@@ -63,7 +64,7 @@ export class ImapConnector implements Connector {
           subject:env?.subject||'(无主题)',snippet:'',date:env?.date?.getTime()||0,unread:!mail.flags?.has('\\Seen'),
           hasAttachments:JSON.stringify(mail.bodyStructure||{}).includes('attachment')});
       }
-      this.snapshots.set(acc.account.id,{validity,next:box.uidNext});
+      if(!q.cursor)this.snapshots.set(acc.account.id,{validity,next});
       return {items,nextCursor,reset};
     });
   }
@@ -78,6 +79,30 @@ export class ImapConnector implements Connector {
       const parsed=await parseMime(mail.source,messageId).catch(()=>{throw new AppError('PROVIDER_BAD_RESPONSE',false,'parse');});
       parsed.unread=!mail.flags?.has('\\Seen');return parsed;
     });
+  }
+  async moveToTrash(acc:Credentials,messageId:string,signal:AbortSignal){
+    const id=/^(\d+):([1-9]\d{0,9})$/.exec(messageId);
+    assert(id&&Number(id[2])<=0xffffffff);
+    return this.session(acc,signal,async client=>{
+      const [,validity,uid]=id;
+      assert(client.mailbox&&String(client.mailbox.uidValidity)===validity,'NOT_FOUND');
+      const nativeMove=client.capabilities.has('MOVE')||client.enabled.has('IMAP4REV2')||
+        (client.capabilities.has('IMAP4rev2')&&!client.capabilities.has('IMAP4rev1'));
+      assert(nativeMove||client.capabilities.has('UIDPLUS'),'MAIL_TRASH_UNAVAILABLE');
+      const trash=(await client.list()).find(box=>box.specialUse==='\\Trash'&&box.path.toUpperCase()!=='INBOX'&&
+        !box.flags.has('\\Noselect')&&!box.flags.has('\\NonExistent'));
+      assert(trash,'MAIL_TRASH_UNAVAILABLE');
+      const options={uid:true};
+      assert(await client.fetchOne(uid,{uid:true},options),'NOT_FOUND');
+      if(signal.aborted)throw new AppError('TIMEOUT');
+      if(nativeMove)assert(await client.messageMove(uid,trash.path,options),'MAIL_DELETE_FAILED');
+      else {
+        assert(await client.messageCopy(uid,trash.path,options),'MAIL_DELETE_FAILED');
+        if(signal.aborted)throw new AppError('TIMEOUT');
+        assert(await client.messageDelete(uid,options),'MAIL_DELETE_FAILED');
+      }
+      assert(!await client.fetchOne(uid,{uid:true},options),'MAIL_DELETE_FAILED');
+    },false);
   }
   async olderCursor(acc:Credentials,messageIds:string[],signal:AbortSignal){
     return this.session(acc,signal,async client=>{

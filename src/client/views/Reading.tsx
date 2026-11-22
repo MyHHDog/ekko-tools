@@ -9,6 +9,8 @@ import { call, cancelPending, readable } from '../rpc-client';
 import { Icon, State } from '../components/States';
 import { t, tFormat } from '../i18n';
 import { readViewCache, writeViewCache } from '../bootstrap-cache';
+import { useIsNarrow } from '../hooks/use-is-narrow';
+import { useRemoteImage } from '../hooks/use-remote-image';
 import { frameDocument } from '../sanitize/html-allowlist';
 import type { ArticleStyle } from '../sanitize/html-allowlist';
 import { ReadingDiscover } from './ReadingDiscover';
@@ -22,8 +24,8 @@ function relative(ts: number) {
   if (now.getTime() - ts < 604800000) return t('周') + ['日', '一', '二', '三', '四', '五', '六'][date.getDay()];
   return tFormat('{m}/{d}', { m: date.getMonth() + 1, d: date.getDate() });
 }
-function ArticleFrame({ html, remoteImages, articleStyle, onPrevious, onNext }: {
-  html: string; remoteImages: boolean; articleStyle?: Partial<ArticleStyle>;
+function ArticleFrame({ html, remoteImages, articleStyle, narrow, onPrevious, onNext }: {
+  html: string; remoteImages: boolean; articleStyle?: Partial<ArticleStyle>; narrow: boolean;
   onPrevious?: () => void; onNext?: () => void;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -33,31 +35,71 @@ function ArticleFrame({ html, remoteImages, articleStyle, onPrevious, onNext }: 
     const frame = frameRef.current;
     if (!frame) return;
     let doc: Document | undefined, armedPrevious = false, armedNext = false;
+    let touchStart: { x: number; y: number } | undefined;
+    const root = () => doc?.scrollingElement || doc?.documentElement;
+    const atTop = () => {
+      const node = root();
+      return !!node && node.scrollTop <= 24;
+    };
+    const atBottom = () => {
+      const node = root();
+      return !!node && node.scrollTop + node.clientHeight >= node.scrollHeight - 24;
+    };
     const onWheel = (event: WheelEvent) => {
-      const root = doc?.scrollingElement || doc?.documentElement;
-      if (!root) return;
       if (event.deltaY < 0) {
-        const atTop = root.scrollTop <= 24;
-        if (!atTop) { armedPrevious = false; return; }
+        if (!atTop()) { armedPrevious = false; return; }
         if (armedPrevious) return;
         armedPrevious = true;
         previousRef.current?.();
         return;
       }
       if (event.deltaY === 0) return;
-      const atBottom = root.scrollTop + root.clientHeight >= root.scrollHeight - 24;
-      if (!atBottom) { armedNext = false; return; }
+      if (!atBottom()) { armedNext = false; return; }
       if (armedNext) return;
       armedNext = true;
       nextRef.current?.();
     };
-    const detach = () => doc?.removeEventListener('wheel', onWheel);
+    const onTouchStart = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      touchStart = touch ? { x: touch.clientX, y: touch.clientY } : undefined;
+    };
+    const onTouchEnd = (event: TouchEvent) => {
+      const start = touchStart, touch = event.changedTouches[0];
+      touchStart = undefined;
+      if (!start || !touch) return;
+      const dx = touch.clientX - start.x, dy = touch.clientY - start.y;
+      if (Math.abs(dy) < 56 || Math.abs(dx) > 72) return;
+      if (dy < 0 && atBottom() && !armedNext) {
+        armedNext = true;
+        nextRef.current?.();
+      } else if (dy > 0 && atTop() && !armedPrevious) {
+        armedPrevious = true;
+        previousRef.current?.();
+      }
+    };
+    const onTouchCancel = () => { touchStart = undefined; };
+    const onScroll = () => {
+      if (!atTop()) armedPrevious = false;
+      if (!atBottom()) armedNext = false;
+    };
+    const detach = () => {
+      if (!doc) return;
+      doc.removeEventListener('wheel', onWheel);
+      doc.removeEventListener('touchstart', onTouchStart);
+      doc.removeEventListener('touchend', onTouchEnd);
+      doc.removeEventListener('touchcancel', onTouchCancel);
+      doc.removeEventListener('scroll', onScroll, true);
+    };
     const bind = () => {
       detach();
       doc = frame.contentDocument || undefined;
       if (doc) {
         armedPrevious = false; armedNext = false;
         doc.addEventListener('wheel', onWheel, { passive: true });
+        doc.addEventListener('touchstart', onTouchStart, { passive: true });
+        doc.addEventListener('touchend', onTouchEnd, { passive: true });
+        doc.addEventListener('touchcancel', onTouchCancel, { passive: true });
+        doc.addEventListener('scroll', onScroll, { passive: true, capture: true });
       }
     };
     frame.addEventListener('load', bind);
@@ -65,20 +107,26 @@ function ArticleFrame({ html, remoteImages, articleStyle, onPrevious, onNext }: 
     return () => { frame.removeEventListener('load', bind); detach(); };
   }, []);
   const srcDoc = useMemo(
-    () => frameDocument(html, remoteImages, 'article', articleStyle),
-    [html, remoteImages, articleStyle],
+    () => frameDocument(html, remoteImages, 'article', articleStyle, narrow),
+    [html, remoteImages, articleStyle, narrow],
   );
   return <div className="article-frame"><iframe ref={frameRef} title="文章正文" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
     referrerPolicy="no-referrer" srcDoc={srcDoc}/></div>;
 }
-function FeedAvatar({ feed }: { feed?: { title?: string; icon?: string } }) {
+function FeedAvatar({ ctx, feed }: { ctx: ClientHost; feed?: { title?: string; icon?: string } }) {
+  const [failed, setFailed] = useState(false);
+  const icon = useRemoteImage(ctx, feed?.icon);
+  useEffect(() => { setFailed(false); }, [icon]);
+  const showIcon = !!icon && !failed;
   return <span className="feed-avatar" aria-hidden="true">
-    <b>{(feed?.title?.[0] || 'R').toUpperCase()}</b>
-    {feed?.icon && <img src={feed.icon} alt="" loading="lazy" referrerPolicy="no-referrer"
-      onError={event => { event.currentTarget.style.display = 'none'; }}/>}
+    {!showIcon && <b>{(feed?.title?.[0] || 'R').toUpperCase()}</b>}
+    {showIcon && <img src={icon} alt="" loading="lazy"
+      onError={() => setFailed(true)}/>}
   </span>;
 }
 export function Reading({ ctx }: { ctx: ClientHost }) {
+  const narrow = useIsNarrow();
+  const compactArticle = useIsNarrow(760);
   const [cached] = useState<ReadingCache | undefined>(() => readViewCache<ReadingCache>(ctx, 'reading'));
   const cachedPage = cached?.filter === 'unread|||' ? cached.page : undefined;
   const [data, setData] = useState<RssBootstrap | undefined>(cached?.data);
@@ -103,6 +151,8 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
   const [addingFolder, setAddingFolder] = useState(false), [folderName, setFolderName] = useState('');
   const [importing, setImporting] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; feedId?: string; folderId?: string }>();
+  const [renameFeed, setRenameFeed] = useState<RssFeed>(), [renameTitle, setRenameTitle] = useState('');
+  const [renameBusy, setRenameBusy] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set());
   const [sortState, setSortState] = useState<{ kind: 'feed' | 'folder'; scope: string; id: string; overId?: string }>();
   const alive = useRef(true), generation = useRef(0), inFlight = useRef(false), advanceAt = useRef(0);
@@ -198,6 +248,15 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [assistantOpen]);
+  useEffect(() => {
+    setSourcesOpen(!narrow);
+  }, [narrow]);
+  useEffect(() => {
+    if (narrow) setSourcesOpen(false);
+  }, [narrow, view, folderId, feedId]);
+  useEffect(() => {
+    if (narrow && selectedId && !showDigest) setSourcesOpen(false);
+  }, [narrow, selectedId, showDigest]);
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(undefined);
@@ -379,7 +438,7 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
     if (!entry.summary && !summaryBusy) void summarizeById(entry.id);
   }
   function startAssistantDrag(event: ReactPointerEvent<HTMLElement>) {
-    if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
+    if (narrow || event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
     assistantDrag.current = {
       id: event.pointerId, x: event.clientX, y: event.clientY,
       ox: assistantOffset.x, oy: assistantOffset.y,
@@ -529,6 +588,18 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
       await bootstrap();
     } catch (reason) { setError(readable(reason)); }
   }
+  async function saveFeedName() {
+    if (!renameFeed || !renameTitle.trim() || renameBusy) return;
+    setRenameBusy(true); setError(undefined);
+    try {
+      await rssCall('rss.feed.rename', { id: renameFeed.id, title: renameTitle.trim() });
+      setRenameFeed(undefined); setRenameTitle('');
+      await bootstrap();
+      await load(true);
+      ctx.ui.notify(t('订阅已重命名'), 'success');
+    } catch (reason) { setError(readable(reason)); }
+    finally { setRenameBusy(false); }
+  }
   function feedMenu(event: ReactMouseEvent, feed: RssFeed) {
     event.preventDefault(); event.stopPropagation();
     setMenu({ x: event.clientX, y: event.clientY, feedId: feed.id });
@@ -595,6 +666,10 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
     setShowDigest(false); setFocus(false); setAssistantOpen(false); setSummaryError(undefined);
   }
   const readerMode = !!selectedId && !showDigest;
+  const detailMode = readerMode || showDigest;
+  const articleIndex = entry ? page.items.findIndex(item => item.id === entry.id) : -1;
+  const canPrevious = articleIndex > 0;
+  const canNext = articleIndex >= 0 && (articleIndex < page.items.length - 1 || !!page.nextCursor);
   const articleStyle = useMemo<Partial<ArticleStyle>>(() => ({
     theme: settings?.articleTheme, font: settings?.articleFont,
     fontSize: settings?.articleFontSize, lineHeight: settings?.articleLineHeight,
@@ -612,12 +687,13 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
       onContextMenu={event => feedMenu(event, feed)} onPointerDown={event => startSort(event, 'feed', scope, feed.id)}
       onClickCapture={event => { if (sortClickGuard.current) { event.preventDefault(); event.stopPropagation(); } }}>
       <button className="reading-feed-main" aria-pressed={feedId === feed.id} onClick={() => selectFeed(feed.id)}>
-        <FeedAvatar feed={feed}/><span className="truncate" title={feed.title}>{feed.title}</span>
+        <FeedAvatar ctx={ctx} feed={feed}/><span className="truncate" title={feed.title}>{feed.title}</span>
         {!!feed.unread && <b>{feed.unread}</b>}
       </button>
     </div>;
   }
   return <section className={'reading-view' + (focus ? ' focus' : '') + (readerMode ? ' article-open' : '')
+    + (detailMode ? ' detail-open' : '')
     + (sourcesOpen ? ' sources-open' : ' sources-collapsed')}
     role="tabpanel" aria-label={t('阅读')}>
     <button className="reading-sources-scrim" aria-label={t('收起订阅源')} tabIndex={-1}
@@ -628,6 +704,8 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
         <div><strong>{t('阅读')}</strong><span className="small">{data
           ? tFormat('{feeds} 个订阅 · {unread} 未读', { feeds: counts?.feeds || 0, unread: counts?.unread || 0 })
           : t('正在加载…')}</span></div>
+        {narrow && <button className="ibtn reading-sources-close" aria-label={t('收起订阅源')}
+          title={t('收起订阅源')} onClick={() => setSourcesOpen(false)}><Icon name="close" sm/></button>}
       </div>
       <nav className="reading-nav" aria-label={t('阅读筛选')}>
         <button aria-pressed={view === 'all' && !folderId && !feedId && !showDigest} className={view === 'all' && !folderId && !feedId && !showDigest ? 'active' : ''} onClick={() => selectView('all')}><Icon name="book" sm/><span>{t('全部')}</span><b>{counts?.feeds || 0}</b></button>
@@ -689,7 +767,7 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
         <input ref={opmlRef} className="reading-file" type="file" accept=".opml,.xml,text/xml,application/xml" onChange={event => { void importOpml(event.target.files?.[0]); event.currentTarget.value = ''; }}/>
       </div>
     </aside>
-    <section className="reading-list-pane" aria-label={t('文章列表')}>
+    <section className="reading-list-pane" aria-label={t('文章列表')} inert={compactArticle && detailMode ? true : undefined}>
       <div className="reading-list-head">
         <button className="ibtn sources-toggle" aria-pressed={sourcesOpen}
           aria-label={sourcesOpen ? t('收起订阅源') : t('展开订阅源')}
@@ -730,7 +808,7 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
       <div className="sbar" role="status"><Icon name="rss" sm/><span>{tFormat('{total} 篇 · {unread} 未读', { total: page.total, unread: page.unread })}</span>
         <span className="spacer"/><span>{data?.lastSyncAt ? tFormat('已同步 · {time}', { time: relative(data.lastSyncAt) }) : t('仅本地缓存')}</span></div>
     </section>
-    <section className="reading-detail-pane" aria-label={t('阅读详情')}>
+    <section className="reading-detail-pane" aria-label={t('阅读详情')} inert={compactArticle && !detailMode ? true : undefined}>
       {detailBusy && !entry
         ? <div className="reading-detail-loading">
           <button className="reading-back" aria-label={t('返回列表')} title={t('返回列表')}
@@ -764,7 +842,7 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
             </div>
             <div className="reading-detail-title">
               <div className="reading-detail-body">
-                <FeedAvatar feed={{ title: entry.feedTitle, icon: entry.feedIcon }}/>
+                <FeedAvatar ctx={ctx} feed={{ title: entry.feedTitle, icon: entry.feedIcon }}/>
                 <div><h2>{entry.title}</h2>
                   <p className="meta">{entry.author && <span>{entry.author} · </span>}
                     <span className="source truncate">{entry.feedTitle}</span>
@@ -775,16 +853,31 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
           <div className="reading-article">
             {entry.contentHtml
               ? <ArticleFrame html={entry.contentHtml} remoteImages={settings?.remoteImages !== false}
-                articleStyle={articleStyle}
+                articleStyle={articleStyle} narrow={compactArticle}
                 onPrevious={() => void openPrevious()} onNext={() => void openNext()}/>
               : <p className="reading-plain" onWheel={event => {
                 const node = event.currentTarget;
                 if (event.deltaY < 0 && node.scrollTop <= 24) void openPrevious();
                 else if (event.deltaY > 0 && node.scrollTop + node.clientHeight >= node.scrollHeight - 24) void openNext();
               }}>{entry.contentText || entry.snippet}</p>}
+            {compactArticle && <div className="reading-article-nav" role="group" aria-label={t('文章导航')}>
+              <button type="button" disabled={!canPrevious} aria-label={t('上一篇')}
+                onClick={() => void openPrevious()}>
+                <Icon name="arrow-left" sm/><span>{t('上一篇')}</span>
+              </button>
+              <button type="button" disabled={!canNext} aria-label={t('下一篇')}
+                onClick={() => void openNext()}>
+                <span>{t('下一篇')}</span><Icon name="arrow-right" sm/>
+              </button>
+            </div>}
           </div>
         </> : showDigest ? <div className="reading-digest">
           <header className="reading-digest-head">
+            {narrow && <button className="reading-back reading-digest-back" aria-label={t('返回列表')}
+              title={t('返回列表')} onClick={backToList}>
+              <span className="reading-back-icon" aria-hidden="true"><Icon name="arrow-left" sm/></span>
+              <span>{t('返回列表')}</span>
+            </button>}
             <span className="eyebrow">AI · {t('今日简报')}</span>
             <h2>{data?.digest?.title || t('今日简报')}</h2>
             {data?.digest?.overview && <p className="reading-digest-overview">{data.digest.overview}</p>}
@@ -841,6 +934,21 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
     </div>}
     {discoverOpen && <ReadingDiscover ctx={ctx} feeds={feeds} folders={folders} defaultFolderId={folderId}
       onClose={() => setDiscoverOpen(false)} onChanged={async () => { await bootstrap(); await load(true); }}/>}
+    {renameFeed && createPortal(<div className="reading-rename" role="dialog" aria-modal="true" aria-label={t('重命名订阅')}
+      onPointerDown={event => { if (event.target === event.currentTarget) { setRenameFeed(undefined); setRenameTitle(''); } }}>
+      <form className="reading-rename-panel" onSubmit={event => { event.preventDefault(); void saveFeedName(); }}>
+        <div className="reading-rename-head"><span className="ring"><Icon name="edit"/></span>
+          <div><h2>{t('重命名订阅')}</h2><p className="small truncate" title={renameFeed.url}>{renameFeed.url}</p></div></div>
+        <label className="reading-rename-field"><span>{t('订阅名称')}</span>
+          <input autoFocus value={renameTitle} maxLength={120} aria-label={t('订阅名称')}
+            onChange={event => setRenameTitle(event.target.value)}/></label>
+        <div className="reading-rename-actions">
+          <button type="button" disabled={renameBusy} onClick={() => { setRenameFeed(undefined); setRenameTitle(''); }}>{t('取消')}</button>
+          <button type="submit" className="primary" disabled={renameBusy || !renameTitle.trim()}>
+            {renameBusy ? t('保存中…') : t('保存')}</button>
+        </div>
+      </form>
+    </div>, document.body)}
     {menu && createPortal(<div className="reading-menu" role="menu"
       style={{
         left: Math.max(8, Math.min(menu.x, window.innerWidth - 232)),
@@ -865,6 +973,11 @@ export function Reading({ ctx }: { ctx: ClientHost }) {
         </button>
         <button role="menuitem" onClick={() => void refreshFeed(menuFeed)}>
           <Icon name="refresh" sm/><span>{t('刷新此订阅')}</span>
+        </button>
+        <button role="menuitem" onClick={() => {
+          setMenu(undefined); setRenameFeed(menuFeed); setRenameTitle(menuFeed.title);
+        }}>
+          <Icon name="edit" sm/><span>{t('重命名订阅')}</span>
         </button>
         <button role="menuitem" className="danger" onClick={() => { setMenu(undefined); void removeFeed(menuFeed); }}>
           <Icon name="trash" sm/><span>{t('删除订阅')}</span>

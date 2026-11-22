@@ -16,7 +16,7 @@ export type ErrorCode =
   | 'NETWORK_UNREACHABLE' | 'TIMEOUT' | 'AUTH_FAILED' | 'AUTH_REQUIRED_APP_PASSWORD'
   | 'RATE_LIMITED' | 'PROVIDER_QUOTA' | 'PROVIDER_BAD_RESPONSE' | 'UNSUPPORTED_LANGUAGE'
   | 'INPUT_TOO_LONG' | 'ATTACHMENT_TOO_LARGE' | 'NOT_FOUND' | 'VAULT_LOCKED'
-  | 'SEND_FAILED' | 'VALIDATION' | 'FEED_TOO_LARGE' | 'FEED_INVALID' | 'INTERNAL';
+  | 'SEND_FAILED' | 'MAIL_TRASH_UNAVAILABLE' | 'MAIL_DELETE_FAILED' | 'VALIDATION' | 'FEED_TOO_LARGE' | 'FEED_INVALID' | 'INTERNAL';
 
 export interface ErrorInfo {
   category?: 'configuration'|'network'|'authentication'|'provider'|'parse'|'internal';

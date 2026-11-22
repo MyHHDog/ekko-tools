@@ -1,7 +1,7 @@
 {
   "id": "ekko-tools",
   "name": "Ekko Tools",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "apiVersion": 1,
   "description": "可扩展工具插件：翻译、统一收发件箱（163/QQ/Gmail/自建 IMAP/SMTP）与 RSS 阅读",
   "author": {

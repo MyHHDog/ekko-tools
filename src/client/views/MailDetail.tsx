@@ -3,25 +3,32 @@ import type {Account,MailMessage,MailSummary,BilingualBody,BilingualSegment} fro
 import type {ClientHost} from '../adapter/host';
 import {call,readable,cancelPending,uiTask} from '../rpc-client';
 import {State,Icon} from '../components/States';
-import {Source} from '../components/AccountChip';
 import {MailBodyFrame} from '../components/MailBodyFrame';
 import {t,tFormat} from '../i18n';
 import {Language} from './Translate';
+import {defaultMailBodyZoom,normalizeMailBodyZoom} from '../../shared/mail';
 const escapeHtml=(value:string)=>value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]||char));
 const translatedText=(body?:BilingualBody)=>(body?.segments.map(segment=>segment.translated||'').filter(Boolean).join('\n\n')||'').trim();
 function translatedDocument(text:string){
   return text.split(/\n{2,}/).filter(Boolean).map(block=>`<p>${escapeHtml(block).replace(/\n/g,'<br>')}</p>`).join('');
 }
-export function MailDetail({ctx,account,messageId,target,onTarget,onBack,onTranslated,onReadChange,neighbors,onOpen,pane=false}:{ctx:ClientHost;account:Account;messageId:string;target:string;onTarget?:(s:string)=>void;onBack:()=>void;onTranslated:()=>void;onReadChange?:(read:boolean)=>void;neighbors:MailSummary[];onOpen:(mail:MailSummary)=>void;pane?:boolean}){
+export function MailDetail({ctx,account,messageId,target,onTarget,bodyZoom:controlledZoom,onBodyZoomChange,onBack,onDeleted=onBack,onTranslated,onReadChange,neighbors,onOpen,pane=false}:{ctx:ClientHost;account:Account;messageId:string;target:string;onTarget?:(s:string)=>void;bodyZoom?:number;onBodyZoomChange?:(value:number)=>void;onBack:()=>void;onDeleted?:()=>void;onTranslated:()=>void;onReadChange?:(read:boolean)=>void;neighbors:MailSummary[];onOpen:(mail:MailSummary)=>void;pane?:boolean}){
   const [mail,setMail]=useState<MailMessage>(),[body,setBody]=useState<BilingualBody>(),[showingTranslation,setShowingTranslation]=useState(false),[to,setTo]=useState(target);
+  const [localBodyZoom,setLocalBodyZoom]=useState(defaultMailBodyZoom);
+  const bodyZoom=controlledZoom??localBodyZoom;
   const [read,setRead]=useState<boolean>();
   const [busy,setBusy]=useState(false),[error,setError]=useState<any>(),[attachmentError,setAttachmentError]=useState<any>(),[downloading,setDownloading]=useState('');
   const [translationError,setTranslationError]=useState<any>();
+  const [deleting,setDeleting]=useState(false),[deleteError,setDeleteError]=useState('');
   const [replyOpen,setReplyOpen]=useState(false),[replyBody,setReplyBody]=useState(''),[sending,setSending]=useState(false),[replyError,setReplyError]=useState<any>();
   const active=useRef(true),cache=useRef(new Map<string,BilingualBody>());
   const lastDownload=useRef('');
   const downloadVersion=useRef(0),[downloadProgress,setDownloadProgress]=useState<number>(),[progress,setProgress]=useState({done:0,total:0});
   const invoke=<T=any,>(name:string,input:object)=>call<T>(ctx,name,{...input,__owner:'detail'});
+  const changeBodyZoom=(value:number)=>{
+    const next=normalizeMailBodyZoom(value);
+    if(onBodyZoomChange)onBodyZoomChange(next);else setLocalBodyZoom(next);
+  };
   async function load(){setError(undefined);try{const data=await call<MailMessage>(ctx,'mail.get',{accountId:account.id,messageId});
     if(!active.current)return;setMail(data);setRead(!data.unread);
     if(data.unread){setRead(true);onReadChange?.(true);void call(ctx,'mail.mark-read',{accountId:account.id,messageId,read:true}).catch(()=>{if(!active.current)return;setRead(false);onReadChange?.(false);});}
@@ -41,9 +48,20 @@ export function MailDetail({ctx,account,messageId,target,onTarget,onBack,onTrans
     try{
       await call(ctx,'mail.reply',{accountId:account.id,messageId,body:replyBody,__owner:'detail'});
       if(!active.current)return;
-      setReplyOpen(false);setReplyBody('');ctx.ui.notify(t('回复已发送'),'success');
+      setReplyOpen(false);setReplyBody('');ctx.ui.notify(t('发件服务器已接收回复'),'success');
     }catch(e){if(active.current)setReplyError(readable(e));}
     finally{if(active.current)setSending(false);}
+  }
+  async function deleteMail(){
+    if(deleting)return;
+    setDeleting(true);setDeleteError('');
+    try{
+      if(!await ctx.ui.confirm(t('将这封邮件移到邮箱垃圾箱？'))||!active.current)return;
+      await call(ctx,'mail.delete',{accountId:account.id,messageId});
+      ctx.ui.notify(t('已移到垃圾箱'),'success');
+      if(active.current)onDeleted();
+    }catch(error){if(active.current)setDeleteError(t(readable(error).message));}
+    finally{if(active.current)setDeleting(false);}
   }
   async function loadRemoteImages(){
     try{const {domains}=await invoke<{domains:string[]}>('mail.image-domains',{accountId:account.id,messageId});
@@ -88,32 +106,47 @@ export function MailDetail({ctx,account,messageId,target,onTarget,onBack,onTrans
   }
   const position=neighbors.findIndex(m=>m.messageId===messageId&&m.accountId===account.id);
   const translated=translatedText(body);
-  return <section className={'detail'+(pane?' detail-pane':'')} aria-label="邮件详情" onKeyDown={e=>{
+  return <section className={'detail mail-detail'+(pane?' detail-pane':'')} aria-label="邮件详情" onKeyDown={e=>{
     if(e.key==='Escape'&&replyOpen){e.preventDefault();setReplyOpen(false);return;}
     if((e.key==='Escape'||e.key==='Backspace')&&!(e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement)){e.preventDefault();onBack();}
   }}>
-    {pane?<div className="row pane-tools"><button className="compact" aria-label={t('上一封')} title={t('上一封')} disabled={position<=0} onClick={()=>onOpen(neighbors[position-1])}><Icon name="arrow-up" sm/></button><button className="compact" aria-label={t('下一封')} title={t('下一封')} disabled={position<0||position>=neighbors.length-1} onClick={()=>onOpen(neighbors[position+1])}><Icon name="arrow-down" sm/></button><span className="spacer"/><button className="compact" aria-label={t('关闭阅读')} title={t('关闭阅读')} onClick={onBack}><Icon name="close" sm/></button></div>:
-      <div className="row"><button aria-label={t('返回收件箱')} title={t('返回收件箱')} onClick={onBack}><Icon name="arrow-left" sm/>{t('返回收件箱')}</button><button className="compact" aria-label={t('上一封')} title={t('上一封')} disabled={position<=0} onClick={()=>onOpen(neighbors[position-1])}><Icon name="arrow-up" sm/></button><button className="compact" aria-label={t('下一封')} title={t('下一封')} disabled={position<0||position>=neighbors.length-1} onClick={()=>onOpen(neighbors[position+1])}><Icon name="arrow-down" sm/></button></div>}
+    <div className={pane?'row pane-tools':'row'}>
+      <button className={pane?'compact pane-back':undefined} aria-label={t('返回收件箱')} title={t('返回收件箱')} onClick={onBack}><Icon name="arrow-left" sm/><span>{t('返回收件箱')}</span></button>
+      <button className="compact" aria-label={t('上一封')} title={t('上一封')} disabled={position<=0} onClick={()=>onOpen(neighbors[position-1])}><Icon name="arrow-up" sm/></button>
+      <button className="compact" aria-label={t('下一封')} title={t('下一封')} disabled={position<0||position>=neighbors.length-1} onClick={()=>onOpen(neighbors[position+1])}><Icon name="arrow-down" sm/></button>
+      {mail&&<button type="button" className="compact" aria-label={t('删除邮件')} title={t('删除邮件')} aria-busy={deleting} disabled={deleting||sending} onClick={()=>void deleteMail()}><Icon name="trash" sm/><span>{t(deleting?'正在删除…':'删除邮件')}</span></button>}
+    </div>
+    <div className="mail-detail-content">
+    {deleteError&&<div className="state bad" role="alert"><Icon name="alert" sm/><div><strong>{t('删除邮件失败')}</strong><p>{deleteError}</p></div></div>}
     {!mail&&!error&&<State kind="syncing" detail={t('正在打开邮件…')}/>}
     {error&&<State kind="syncError" detail={`${error.code} · ${error.message}`} action={<button onClick={load}>{t('重试')}</button>}/>}
-    {mail&&<><div className="meta"><span className={'avatar '+({['163']:'s163',qq:'sqq',gmail:'sgm',custom:'scustom'} as Record<string,string>)[account.provider]} aria-hidden="true">{(mail.from.name||mail.from.address||'?').trim()[0]?.toUpperCase()}</span>
-      <div style={{minWidth:0,flex:1}}><div className="truncate" style={{fontWeight:700}}>{mail.from.name||mail.from.address}</div><p className="address truncate">{mail.from.address}</p></div><Source account={account}/></div>
+    {mail&&<><div className="meta">
+      <div style={{minWidth:0,flex:1}}><div className="truncate" style={{fontWeight:700}}>{mail.from.name||mail.from.address}</div><p className="address truncate">{mail.from.address}</p></div></div>
       <h2 className="mail-title">{mail.subject}</h2>
-      <p className="address">{t('发件人：')}{mail.from.name||''} &lt;{mail.from.address}&gt;</p><p className="address">{t('收件人：')}{mail.to.map(a=>a.address).join('，')}</p><p className="small">{new Date(mail.date).toLocaleString('zh-CN')}</p>
-      <div className="row wrap"><button className="primary" disabled={busy} onClick={()=>showingTranslation?setShowingTranslation(false):void translate()}>{busy?t('翻译中…'):showingTranslation?t('查看原文'):t('翻译')}</button>{body&&<button disabled={busy} onClick={()=>translate({retry:true})}>{t('重新翻译')}</button>}
+      <p className="address sender-address">{t('发件人：')}{mail.from.name||''} &lt;{mail.from.address}&gt;</p><p className="address recipient-address">{t('收件人：')}{mail.to.map(a=>a.address).join('，')}</p><p className="small mail-date">{new Date(mail.date).toLocaleString('zh-CN')}</p>
+      <div className="row wrap mail-actions"><div className="translate-control">
+        <button className="primary" disabled={busy} onClick={()=>showingTranslation?setShowingTranslation(false):void translate()}>{busy?t('翻译中…'):showingTranslation?t('查看原文'):t('翻译')}</button>
+        <label className="translate-target"><span>{t('译为')}</span><Language label={t('邮件翻译目标')} value={to} disabled={busy} onChange={v=>{setTo(v);onTarget?.(v);setBody(cache.current.get(v));setShowingTranslation(false);setProgress({done:0,total:0});setTranslationError(undefined);}}/></label>
+      </div>{body&&<button disabled={busy} onClick={()=>translate({retry:true})}>{t('重新翻译')}</button>}
         {busy&&progress.total>0&&<span className="small" role="status" aria-label={t('翻译进度')}>{tFormat('{done}/{total}批',{done:progress.done,total:progress.total})}</span>}{busy&&<button onClick={()=>{cancelPending(ctx,'detail');setBusy(false);}}>{t('取消翻译')}</button>}
         <button disabled={busy||sending} onClick={()=>{setReplyOpen(value=>!value);setReplyError(undefined);}}>{replyOpen?t('取消回复'):t('回复')}</button>
-        {read!==undefined&&<button onClick={()=>uiTask(ctx,()=>updateRead(!read),setError)}>{read?t('标为未读'):t('标为已读')}</button>}</div>
-      {replyOpen&&<div className="card reply-form">
+        {read!==undefined&&<button onClick={()=>uiTask(ctx,()=>updateRead(!read),setError)}>{read?t('标为未读'):t('标为已读')}</button>}
+        <div className="mail-body-tools" role="group" aria-label={t('正文缩放')}>
+          <div className="zoom-stepper">
+            <button type="button" aria-label={t('缩小正文')} disabled={bodyZoom<=20} onClick={()=>changeBodyZoom(bodyZoom-10)}>−</button>
+            <button type="button" className="zoom-value" aria-label={t('恢复正文大小')} title={t('恢复正文大小')} aria-live="polite" onClick={()=>changeBodyZoom(100)}>{bodyZoom}%</button>
+            <button type="button" aria-label={t('放大正文')} disabled={bodyZoom>=200} onClick={()=>changeBodyZoom(bodyZoom+10)}>+</button>
+          </div>
+        </div></div>
+      {replyOpen&&<div className="reply-form">
         <div className="row"><strong>{t('回复')}</strong><span className="small truncate">{mail.from.name?`${mail.from.name} <${mail.from.address}>`:mail.from.address}</span></div>
         <textarea value={replyBody} maxLength={20000} rows={6} autoFocus aria-label={t('回复内容')} placeholder={t('输入回复内容')} onChange={e=>setReplyBody(e.target.value)} onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();setReplyOpen(false);}}}/>
         {replyError&&<State kind="syncError" detail={`${replyError.code} · ${replyError.message}`} action={<button className="compact" onClick={()=>setReplyError(undefined)}>{t('重试')}</button>}/>}
         <div className="row wrap"><button className="primary" disabled={sending||busy} onClick={()=>void sendReply()}>{sending?t('发送中…'):t('发送')}</button><button disabled={sending} onClick={()=>{setReplyOpen(false);setReplyBody('');setReplyError(undefined);}}>{t('取消')}</button></div>
       </div>}
-      <label>{t('翻译目标')}<Language label={t('邮件翻译目标')} value={to} onChange={v=>{setTo(v);onTarget?.(v);setBody(cache.current.get(v));setShowingTranslation(false);setProgress({done:0,total:0});setTranslationError(undefined);}}/></label>
       {translationError&&<State kind="translateError" detail={`${translationError.code} · ${translationError.message}`} action={<button disabled={busy} onClick={()=>translate({retry:true})}>{t('重试')}</button>}/>}
-      {showingTranslation&&translated?mail.html?<MailBodyFrame html={translatedDocument(translated)}/>:<div className="reader card" tabIndex={0} aria-label={t('译文正文')}>{translated}</div>
-        :mail.html?<MailBodyFrame html={mail.html}/>:<div className="reader card" tabIndex={0} aria-label={t('可划词的邮件正文')}>{mail.text||t('这封邮件没有正文，可能只包含附件')}</div>}
+      {showingTranslation&&translated?mail.html?<MailBodyFrame html={translatedDocument(translated)} zoom={bodyZoom}/>:<div className="reader card" tabIndex={0} aria-label={t('译文正文')} style={{fontSize:`${bodyZoom}%`}}>{translated}</div>
+        :mail.html?<MailBodyFrame html={mail.html} zoom={bodyZoom}/>:<div className="reader card" tabIndex={0} aria-label={t('可划词的邮件正文')} style={{fontSize:`${bodyZoom}%`}}>{mail.text||t('这封邮件没有正文，可能只包含附件')}</div>}
       {body&&!body.complete&&!busy&&<div className="state"><Icon name="alert"/><div><strong>{t('翻译未完成')}</strong><button disabled={busy} onClick={()=>translate({continue:true})}>{t('继续翻译')}</button></div></div>}
       <h3>{tFormat('附件（{count}）',{count:mail.attachments.length})}</h3>
       {!mail.attachments.length&&<p className="small">{t('没有附件')}</p>}
@@ -124,5 +157,6 @@ export function MailDetail({ctx,account,messageId,target,onTarget,onBack,onTrans
       {downloadProgress!==undefined&&<div role="status"><progress value={downloadProgress} max={100} aria-label={t('附件下载进度')}/>{downloadProgress}%{downloading&&<button onClick={()=>{downloadVersion.current++;cancelPending(ctx,'attachment');setDownloading('');setDownloadProgress(undefined);ctx.ui.notify(t('已取消下载'));}}>{t('取消下载')}</button>}</div>}
       {attachmentError&&<State kind="attachmentError" detail={`${attachmentError.code} · ${attachmentError.message}`} action={<button onClick={()=>download(lastDownload.current)}>重试</button>}/>}
     </>}
+    </div>
   </section>;
 }

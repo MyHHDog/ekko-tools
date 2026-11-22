@@ -105,7 +105,7 @@ export class RssService {
   }
   private mapFeed(row: any): RssFeed {
     return {
-      id: row.id, url: row.url, title: row.title, siteUrl: row.site_url, description: row.description,
+      id: row.id, url: row.url, title: row.custom_title || row.title, siteUrl: row.site_url, description: row.description,
       icon: row.icon, enabled: row.enabled === 1,
       ...(row.folder_id ? { folderId: row.folder_id } : {}),
       ...(row.last_fetched_at ? { lastFetchedAt: row.last_fetched_at } : {}),
@@ -220,18 +220,22 @@ export class RssService {
     const folderId = input.folderId && this.store().get('SELECT id FROM folders WHERE id=?', [input.folderId]) ? input.folderId : null;
     const id = randomUUID(), now = Date.now();
     const order = this.store().get<{ n: number }>('SELECT COALESCE(MAX(sort_order),-1)+1 n FROM feeds WHERE COALESCE(folder_id,\'\')=?', [folderId || ''])?.n || 0;
-    this.store().run(`INSERT INTO feeds(id,url,title,site_url,description,icon,folder_id,enabled,etag,last_modified,
-      last_fetched_at,created_at,failure_count,next_fetch_at,last_status,updated_at,sort_order) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,0,?,?,?,?)`,
-    [id, url.toString(), parsed.title, parsed.siteUrl || url.origin, parsed.description, parsed.icon,
-      folderId, page.etag || null, page.lastModified || null, now, now,
-      now + this.settings().pollMinutes * 60000, page.status, now, order]);
-    this.upsertEntries(id, parsed);
+    this.store().transaction(() => {
+      this.store().run(`INSERT INTO feeds(id,url,title,site_url,description,icon,folder_id,enabled,etag,last_modified,
+        last_fetched_at,created_at,failure_count,next_fetch_at,last_status,updated_at,sort_order) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,0,?,?,?,?)`,
+      [id, url.toString(), parsed.title, parsed.siteUrl || url.origin, parsed.description, parsed.icon,
+        folderId, page.etag || null, page.lastModified || null, now, now,
+        now + this.settings().pollMinutes * 60000, page.status, now, order]);
+      this.upsertEntries(id, parsed);
+    });
     return { feed: this.feedById(id) };
   }
   removeFeed(id: string) {
-    this.store().run('DELETE FROM entries WHERE feed_id=?', [String(id)]);
-    this.store().run('DELETE FROM feeds WHERE id=?', [String(id)]);
-    this.store().run('DELETE FROM summaries WHERE entry_id NOT IN (SELECT id FROM entries)');
+    this.store().transaction(() => {
+      this.store().run('DELETE FROM entries WHERE feed_id=?', [String(id)]);
+      this.store().run('DELETE FROM feeds WHERE id=?', [String(id)]);
+      this.store().run('DELETE FROM summaries WHERE entry_id NOT IN (SELECT id FROM entries)');
+    });
     return { removed: true };
   }
   moveFeed(id: string, folderId?: string) {
@@ -241,6 +245,13 @@ export class RssService {
     const order = this.store().get<{ n: number }>('SELECT COALESCE(MAX(sort_order),-1)+1 n FROM feeds WHERE COALESCE(folder_id,\'\')=?', [target])?.n || 0;
     this.store().run('UPDATE feeds SET folder_id=?,sort_order=?,updated_at=? WHERE id=?', [target || null, order, Date.now(), String(id)]);
     return { ok: true };
+  }
+  renameFeed(id: string, title: string) {
+    const value = title.trim().slice(0, 120);
+    assert(value);
+    assert(this.store().get('SELECT id FROM feeds WHERE id=?', [String(id)]), 'NOT_FOUND');
+    this.store().run('UPDATE feeds SET custom_title=?,updated_at=? WHERE id=?', [value, Date.now(), String(id)]);
+    return { feed: this.feedById(id) };
   }
   private recordRun(feedId: string, status: number, added: number, error?: string) {
     this.store().run('INSERT INTO feed_runs(feed_id,at,status,new_entries,error) VALUES(?,?,?,?,?)',
@@ -255,28 +266,35 @@ export class RssService {
       }, false);
       if (page.status === 304) {
         const now = Date.now();
-        this.store().run(`UPDATE feeds SET last_fetched_at=?,last_error=NULL,failure_count=0,last_status=304,
-          next_fetch_at=?,updated_at=? WHERE id=?`, [now, now + pollMs, now, row.id]);
-        this.recordRun(row.id, 304, 0);
+        this.store().transaction(() => {
+          this.store().run(`UPDATE feeds SET last_fetched_at=?,last_error=NULL,failure_count=0,last_status=304,
+            next_fetch_at=?,updated_at=? WHERE id=?`, [now, now + pollMs, now, row.id]);
+          this.recordRun(row.id, 304, 0);
+        });
         return 0;
       }
       if (!parsed) return 0;
-      const added = this.upsertEntries(row.id, parsed);
       const now = Date.now();
-      this.store().run(`UPDATE feeds SET title=?,site_url=?,description=?,icon=?,etag=?,last_modified=?,
-        last_fetched_at=?,last_error=NULL,failure_count=0,last_status=?,next_fetch_at=?,updated_at=? WHERE id=?`,
-      [parsed.title || row.title, parsed.siteUrl || row.site_url, parsed.description || row.description,
-        parsed.icon || row.icon, page.etag || row.etag, page.lastModified || row.last_modified, now,
-        page.status, now + pollMs, now, row.id]);
-      this.recordRun(row.id, page.status, added);
+      const added = this.store().transaction(() => {
+        const count = this.upsertEntries(row.id, parsed);
+        this.store().run(`UPDATE feeds SET title=?,site_url=?,description=?,icon=?,etag=?,last_modified=?,
+          last_fetched_at=?,last_error=NULL,failure_count=0,last_status=?,next_fetch_at=?,updated_at=? WHERE id=?`,
+        [parsed.title || row.title, parsed.siteUrl || row.site_url, parsed.description || row.description,
+          parsed.icon || row.icon, page.etag || row.etag, page.lastModified || row.last_modified, now,
+          page.status, now + pollMs, now, row.id]);
+        this.recordRun(row.id, page.status, count);
+        return count;
+      });
       return added;
     } catch (error) {
       const message = error instanceof AppError ? error.message : '抓取失败，请检查订阅地址';
       const failures = Number(row.failure_count || 0) + 1;
       const now = Date.now(), retryAt = now + Math.min(pollMs * 2 ** Math.min(failures, 6), 6 * 3600000);
-      this.store().run(`UPDATE feeds SET last_error=?,failure_count=?,last_status=0,next_fetch_at=?,updated_at=? WHERE id=?`,
-        [message.slice(0, 200), failures, retryAt, now, row.id]);
-      this.recordRun(row.id, 0, 0, message);
+      this.store().transaction(() => {
+        this.store().run(`UPDATE feeds SET last_error=?,failure_count=?,last_status=0,next_fetch_at=?,updated_at=? WHERE id=?`,
+          [message.slice(0, 200), failures, retryAt, now, row.id]);
+        this.recordRun(row.id, 0, 0, message);
+      });
       throw error;
     }
   }
@@ -354,7 +372,7 @@ export class RssService {
       `SELECT COUNT(*) n, COALESCE(SUM(CASE WHEN e.read=0 THEN 1 ELSE 0 END),0) unread ${base}`, params);
     const total = counts?.n || 0, unread = counts?.unread || 0;
     const rows = this.store().all<any>(`SELECT e.id,e.feed_id,e.title,e.url,e.author,e.published_at,e.snippet,
-      e.read,e.starred,e.image,f.title feed_title,f.icon feed_icon,
+      e.read,e.starred,e.image,COALESCE(f.custom_title,f.title) feed_title,f.icon feed_icon,
       EXISTS(SELECT 1 FROM summaries s WHERE s.entry_id=e.id) has_summary
       ${from} WHERE ${clause} ORDER BY e.published_at DESC,e.id DESC LIMIT ? OFFSET ?`,
     [...params, limit, offset]);
@@ -403,7 +421,7 @@ export class RssService {
     }
   }
   async getEntry(id: string, waitForFullText = false): Promise<RssEntry> {
-    let row = this.store().get<any>(`SELECT e.*,f.title feed_title,f.icon feed_icon,s.payload summary_payload
+    let row = this.store().get<any>(`SELECT e.*,COALESCE(f.custom_title,f.title) feed_title,f.icon feed_icon,s.payload summary_payload
       FROM entries e JOIN feeds f ON f.id=e.feed_id LEFT JOIN summaries s ON s.entry_id=e.id WHERE e.id=?`, [String(id)]);
     assert(row, 'NOT_FOUND');
     this.store().run('UPDATE entries SET read=1 WHERE id=?', [String(id)]);
@@ -413,7 +431,7 @@ export class RssService {
       updated = waitForFullText ? await this.extractOnce(row) : await this.extractWithinBudget(row);
     }
     if (updated) {
-      row = this.store().get<any>(`SELECT e.*,f.title feed_title,f.icon feed_icon,s.payload summary_payload
+      row = this.store().get<any>(`SELECT e.*,COALESCE(f.custom_title,f.title) feed_title,f.icon feed_icon,s.payload summary_payload
         FROM entries e JOIN feeds f ON f.id=e.feed_id LEFT JOIN summaries s ON s.entry_id=e.id WHERE e.id=?`, [String(id)]);
     }
     return this.mapEntry(row);
@@ -470,7 +488,7 @@ export class RssService {
   getDigest(): RssDigest | undefined { return this.latestDigest(); }
   async generateDigest(run: Run, period: 'day' | 'week' = 'day') {
     const since = Date.now() - (period === 'week' ? 7 : 1) * 86400000;
-    const rows = this.store().all<any>(`SELECT e.*,f.title feed_title,f.icon feed_icon,s.payload summary_payload
+    const rows = this.store().all<any>(`SELECT e.*,COALESCE(f.custom_title,f.title) feed_title,f.icon feed_icon,s.payload summary_payload
       FROM entries e JOIN feeds f ON f.id=e.feed_id LEFT JOIN summaries s ON s.entry_id=e.id
       WHERE e.published_at>=? ORDER BY e.published_at DESC LIMIT 40`, [since]);
     if (!rows.length) throw new AppError('NOT_FOUND');
@@ -504,7 +522,7 @@ export class RssService {
     const escape = (value: string) => value.replace(/[&<>"']/g, char =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[char] || char));
     const outlines = this.feedRows().map(row =>
-      `<outline type="rss" text="${escape(row.title)}" title="${escape(row.title)}" xmlUrl="${escape(row.url)}" htmlUrl="${escape(row.site_url)}"/>`
+      `<outline type="rss" text="${escape(row.custom_title || row.title)}" title="${escape(row.custom_title || row.title)}" xmlUrl="${escape(row.url)}" htmlUrl="${escape(row.site_url)}"/>`
     ).join('');
     return { content: `<?xml version="1.0" encoding="UTF-8"?><opml version="2.0"><head><title>Ekko 阅读</title></head><body>${outlines}</body></opml>` };
   }

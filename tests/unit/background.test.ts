@@ -2,6 +2,7 @@ import {describe,it,expect,afterEach,vi} from 'vitest';
 import {addFixtures,harness,unwrap} from '../helpers';
 import {FixtureConnector} from '../fixtures/connector';
 import {openMailDb} from '../mail-db';
+import {AppError} from '../../src/shared/error-codes';
 const open:Awaited<ReturnType<typeof harness>>[]=[];
 afterEach(async()=>{for(const h of open.splice(0))await h.close();vi.restoreAllMocks();});
 describe('后台同步与服务器已读回写',()=>{
@@ -10,6 +11,26 @@ describe('后台同步与服务器已读回写',()=>{
     expect(h.actions.has('mail.poll')).toBe(true);
     expect(h.schedules).toContainEqual(expect.objectContaining({id:'mail-poll',intervalMs:30000,action:'mail.poll'}));
     expect(await h.runAction('mail.poll')).toMatchObject({checked:3,updated:3});
+  });
+  it('后台轮询已连接账号不再反复广播连接状态',async()=>{
+    const h=await harness();open.push(h);await addFixtures(h);
+    h.events.length=0;
+    expect(await h.runAction('mail.poll')).toMatchObject({checked:3,updated:3});
+    expect(h.events.filter(event=>event.type==='account.state')).toHaveLength(0);
+  });
+  it('后台轮询连续失败后才标记离线，偶发失败不闪烁',async()=>{
+    const real=new FixtureConnector();
+    vi.spyOn(real,'list').mockRejectedValue(new AppError('PROVIDER_BAD_RESPONSE',false,'provider'));
+    const h=await harness({real});open.push(h);const accounts=await addFixtures(h);
+    h.events.length=0;
+    await h.runAction('mail.poll');
+    await h.runAction('mail.poll');
+    expect((await unwrap(h,'app.bootstrap')).accounts.map((account:any)=>account.state.status)).toEqual(['connected','connected','connected']);
+    expect(h.events.filter(event=>event.type==='account.state')).toHaveLength(0);
+    await h.runAction('mail.poll');
+    const offline=(await unwrap(h,'app.bootstrap')).accounts.filter((account:any)=>account.state.status==='offline');
+    expect(offline.map((account:any)=>account.id).sort()).toEqual(accounts.map((account:any)=>account.id).sort());
+    expect(h.events.filter(event=>event.type==='account.state'&&event.data.state.status==='offline')).toHaveLength(3);
   });
   it('后台同步阻塞时不占用启动与翻译队列',async()=>{
     const real=new FixtureConnector(),original=real.list.bind(real);

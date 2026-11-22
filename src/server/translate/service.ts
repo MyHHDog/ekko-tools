@@ -9,12 +9,16 @@ import { HostModelProvider } from './host-model';
 import { OpenAIProvider } from './openai';
 import { glossaryKey, normalizeGlossary, protectGlossary, restoreGlossary } from './glossary';
 import { cacheKey, TranslationCache } from './cache';
+import { TranslationHistory } from './history';
 import { Vault } from '../vault/store';
 import { bounded, retry } from '../retry';
 export class TranslationService {
   private cache:TranslationCache;
-  constructor(private host:Host,private store:Storage,private vault:Vault,private timeoutMs:number){this.cache=new TranslationCache(store);}
-  bind(store:Storage){this.store=store;this.cache.bind(store);}
+  private historyStore:TranslationHistory;
+  constructor(private host:Host,private store:Storage,private vault:Vault,private timeoutMs:number){
+    this.cache=new TranslationCache(store);this.historyStore=new TranslationHistory(store);
+  }
+  bind(store:Storage){this.store=store;this.cache.bind(store);this.historyStore.bind(store);}
   async credentials() {
     try{return JSON.parse(await this.vault.get('translation')) as {appid:string;secret:string};}
     catch(e){if(e instanceof AppError&&e.code==='NOT_FOUND')return {appid:'',secret:''};throw e;}
@@ -55,7 +59,7 @@ export class TranslationService {
       providerId==='deepl'?deepl.apiKey.trim().endsWith(':fx')?'deepl-free':'deepl-pro':settings.model||'';
     return {provider,key};
   }
-  async history(limit=20):Promise<TranslationJob[]> {return (await this.store.get<TranslationJob[]>('history')||[]).slice(0,Math.min(limit,50));}
+  async history(limit=20):Promise<TranslationJob[]> {return this.historyStore.list(limit);}
   async test(providerId:TranslateProviderId|undefined,run:Run):Promise<ProviderTestResult>{
     const settings=await this.store.get<any>('preferences')||{},glossary=normalizeGlossary(settings.glossary);
     const id=await this.resolveProviderId(providerId,settings);
@@ -85,7 +89,7 @@ export class TranslationService {
       return {...value,translated:restoreGlossary(value.translated,protectedText.tokens)};
     },run.signal,this.host.lifecycle,this.timeoutMs);
     const job:TranslationJob={id:randomUUID(),request:{text:req.text,from:req.from,to:req.to,provider:provider.id,retryNonce:req.retryNonce},status:'done',result,attempts,createdAt:Date.now()};
-    const old=await this.history(49);await this.store.set('history',[job,...old]);await this.cache.put(key,job);return job;
+    await this.historyStore.add(job);await this.cache.put(key,job);return job;
   }
   async retry(id:string,provider:TranslateRequest['provider'],run:Run){
     const job=(await this.history(50)).find(j=>j.id===id);if(!job)throw new AppError('NOT_FOUND');

@@ -10,15 +10,22 @@ export function cancelPending(ctx:ClientHost,owner:string) {
   for(const requestId of pending.get(ctx)?.get(owner)||[])void ctx.rpc.call('app.cancel',{requestId}).catch(()=>{console.warn('[ekko-tools] cancel_unconfirmed');});
   pending.get(ctx)?.delete(owner);
 }
-export async function call<T=any>(ctx:ClientHost,name:string,input?:any):Promise<T> {
-  const owner=input?.__owner||'general',id=uuid();
+export async function call<T=any>(ctx:ClientHost,name:string,input?:any,timeoutMs?:number,id=uuid()):Promise<T> {
+  const owner=input?.__owner||'general';
   const payload=JSON.parse(JSON.stringify({...input,__requestId:id}));
   if(!pending.has(ctx))pending.set(ctx,new Map());const owners=pending.get(ctx)!;
   if(!owners.has(owner))owners.set(owner,new Set());owners.get(owner)!.add(id);
+  let timer:ReturnType<typeof setTimeout>|undefined;
   try{
-    const result=await ctx.rpc.call<T>(name,payload);
+    const request=ctx.rpc.call<T>(name,payload);
+    const result=timeoutMs===undefined?await request:await Promise.race([request,new Promise<never>((_,reject)=>{
+      timer=setTimeout(()=>{
+        reject(new RpcError({code:'TIMEOUT',message:t('未收到服务器响应，请检查连接后重试'),retryable:true}));
+        void Promise.resolve().then(()=>ctx.rpc.call('app.cancel',{requestId:id})).catch(()=>{});
+      },timeoutMs);
+    })]);
     if(!result.ok)throw new RpcError(result.error);return result.data;
-  }finally{owners.get(owner)?.delete(id);}
+  }finally{clearTimeout(timer);owners.get(owner)?.delete(id);}
 }
 export function readable(error:unknown) {
   if(error instanceof RpcError)return error.info;

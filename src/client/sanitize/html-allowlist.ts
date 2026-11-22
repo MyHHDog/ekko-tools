@@ -59,12 +59,18 @@ export function sanitizeClient(raw:string,remoteImages=false) {
   }
   return {html:styles.map(css=>`<style>${css}</style>`).join('')+doc.body.innerHTML};
 }
-const MAIL_STYLE='html,body{margin:0;padding:0;background:#fff;color:#111;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}img{max-width:100%;height:auto}table{max-width:100%;border-collapse:collapse}td,th{vertical-align:top}a{color:#1a5fb4}';
-const ARTICLE_STYLE=`html{background:#fbfaf6}
-*{box-sizing:border-box}
-html,body{margin:0;color:#20242b;font:16px/1.85 "Noto Serif SC","Source Han Serif SC","Songti SC",Georgia,serif;text-rendering:optimizeLegibility}
+const MAIL_STYLE=`html,body{margin:0;padding:0;background:#fff;color:#252825;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;-webkit-text-size-adjust:100%}
+img{max-width:100%;height:auto}table{max-width:100%;border-collapse:collapse}td,th{vertical-align:top}a{color:#365a47}
+@media (max-width:560px){
+  html,body{font-size:16px;line-height:1.7}
+  body{width:100%;box-sizing:border-box;padding:12px 12px 22px}
+  table{display:block;overflow-x:auto}
+  pre{overflow-x:auto}
+}`;
+const ARTICLE_STYLE=`*{box-sizing:border-box}
+html,body{margin:0;text-rendering:optimizeLegibility}
 body{max-width:720px;margin:0 auto;padding:40px 44px 56px;overflow-wrap:break-word}
-h1,h2,h3,h4{line-height:1.38;letter-spacing:-.012em;color:#151a22;margin:1.5em 0 .6em}
+h1,h2,h3,h4{line-height:1.38;letter-spacing:-.012em;margin:1.5em 0 .6em}
 h1{margin-top:.2em;font-size:1.82em;letter-spacing:-.02em}
 h2{font-size:1.4em}
 h3{font-size:1.18em}
@@ -74,22 +80,22 @@ ul,ol{margin:0 0 1.1em;padding-left:1.4em}
 li+li{margin-top:.3em}
 img{display:block;max-width:100%;height:auto;margin:1.6em auto;border-radius:10px}
 figure{margin:1.6em 0}
-figcaption{margin-top:.55em;font:12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#4b5666;text-align:center}
-a{color:#2d5f9a;text-underline-offset:2px}
-blockquote{margin:1.4em 0;padding:.35em 0 .35em 1.1em;border-left:3px solid #c9d3e2;color:#4b5666}
-hr{border:0;border-top:1px solid #d9dee7;margin:2em 0}
-pre{overflow:auto;padding:14px 16px;border-radius:10px;background:#eef1f5;font:13px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace}
+figcaption{margin-top:.55em;font:12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-align:center}
+a{text-underline-offset:2px}
+blockquote{margin:1.4em 0;padding:.35em 0 .35em 1.1em;border-left:3px solid}
+hr{border:0;border-top:1px solid;margin:2em 0}
+pre{overflow:auto;padding:14px 16px;border-radius:10px;font:13px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace}
 code{font:13px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace}
 table{display:block;width:100%;max-width:100%;overflow-x:auto;border-collapse:collapse;font-size:.92em}
-td,th{vertical-align:top;padding:7px 10px;border:1px solid #d9dee7;text-align:left}
-th{background:#eef1f5;font-weight:600}
+td,th{vertical-align:top;padding:7px 10px;border:1px solid;text-align:left}
+th{font-weight:600}
 @media (max-width:560px){body{padding:24px 18px 40px;font-size:15px}h1{font-size:1.6em}}`;
 const ARTICLE_THEMES: Record<RssArticleTheme, {
   bg: string; text: string; muted: string; heading: string; rule: string; link: string; surface: string;
 }> = {
-  paper: { bg: '#fbfaf6', text: '#20242b', muted: '#4b5666', heading: '#151a22', rule: '#d9dee7', link: '#2d5f9a', surface: '#eef1f5' },
+  paper: { bg: '#ffffff', text: '#252825', muted: '#505751', heading: '#252825', rule: '#dce3dc', link: '#365a47', surface: '#f0f2ef' },
   sepia: { bg: '#f4ecd8', text: '#43382a', muted: '#766851', heading: '#30271b', rule: '#d8cbb2', link: '#845a1c', surface: '#ece0c7' },
-  dark: { bg: '#121a26', text: '#d8e2f0', muted: '#94a5bc', heading: '#f2f6fc', rule: '#2a3648', link: '#8fb8f0', surface: '#1b2533' },
+  dark: { bg: '#232624', text: '#e0e5e0', muted: '#b5beb6', heading: '#f3f5f2', rule: '#454c46', link: '#a8cbb0', surface: '#303631' },
 };
 const ARTICLE_FONTS: Record<RssArticleFont, string> = {
   serif: '"Noto Serif SC","Source Han Serif SC","Songti SC",Georgia,serif',
@@ -107,13 +113,18 @@ export function sanitizeArticleCss(value: string) {
     .replace(/(expression|javascript:|vbscript:|behavior\s*:|-moz-binding|url\s*\()[^;}]*;?/gi, '')
     .replace(/(position\s*:\s*(fixed|sticky)|z-index\s*:)[^;}]*;?/gi, '');
 }
-export function articleDocumentStyle(style?: Partial<ArticleStyle>) {
+export function articleDocumentStyle(style?: Partial<ArticleStyle>, mobile = false) {
   const value = { ...defaultArticleStyle, ...style };
   const theme = ARTICLE_THEMES[value.theme] || ARTICLE_THEMES.paper;
   const fontSize = Math.round(clamp(value.fontSize, 12, 24, 16));
   const lineHeight = clamp(value.lineHeight, 1.4, 2.4, 1.85).toFixed(2);
   const width = Math.round(clamp(value.width, 520, 1024, 720));
   const font = ARTICLE_FONTS[value.font] || ARTICLE_FONTS.serif;
+  const mobileSize = mobile ? Math.max(fontSize, 17) : Math.max(12, fontSize - 1);
+  const mobileHeight = mobile ? Math.max(Number(lineHeight), 1.9).toFixed(2) : lineHeight;
+  const mobileBody = mobile
+    ? 'padding:18px 16px calc(92px + env(safe-area-inset-bottom,0px));max-width:none;'
+    : 'padding:24px 18px 40px;';
   return `${ARTICLE_STYLE}
 html{background:${theme.bg}}
 html,body{color:${theme.text};font:${fontSize}px/${lineHeight} ${font}}
@@ -124,19 +135,32 @@ a{color:${theme.link}}
 hr,td,th{border-color:${theme.rule}}
 pre,code,th{background:${theme.surface}}
 blockquote{border-left-color:${theme.rule}}
-@media (max-width:560px){body{font-size:${Math.max(12, fontSize - 1)}px}}`;
+@media (max-width:560px){
+  body{${mobileBody}font-size:${mobileSize}px;line-height:${mobileHeight}}
+  h1{font-size:${mobile ? '1.78' : '1.6'}em}
+  img{margin:1.3em auto;border-radius:8px}
+  pre{font-size:12.5px;padding:12px 13px}
+}`;
 }
-export function articleStyleSheet(style?: Partial<ArticleStyle>) {
-  return articleDocumentStyle(style);
+export function articleStyleSheet(style?: Partial<ArticleStyle>, mobile = false) {
+  return articleDocumentStyle(style, mobile);
 }
-export function frameDocument(html:string,remoteImages=false,mode:'mail'|'article'='mail',articleStyle?:Partial<ArticleStyle>) {
+export function frameDocument(html:string,remoteImages=false,mode:'mail'|'article'='mail',articleStyle?:Partial<ArticleStyle>,mobile=false,zoom=100) {
   const safe=sanitizeClient(html,remoteImages);
   const doc=new DOMParser().parseFromString(safe.html,'text/html');
   const meta=doc.createElement('meta');meta.httpEquiv='Content-Security-Policy';
   meta.content=`default-src 'none'; img-src ${remoteImages?'https: data:':'data:'}; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'`;
+  const viewport=doc.createElement('meta');viewport.name='viewport';
+  viewport.content='width=device-width, initial-scale=1, viewport-fit=cover';
   const base=doc.createElement('style');
-  base.textContent=mode==='article'?articleStyleSheet(articleStyle):MAIL_STYLE;
-  doc.head.prepend(meta);doc.head.append(base);
+  base.textContent=mode==='article'?articleStyleSheet(articleStyle,mobile):MAIL_STYLE;
+  doc.head.prepend(meta);doc.head.prepend(viewport);doc.head.append(base);
+  const mailZoom=Math.round(clamp(zoom,20,200,100));
+  if(mode==='mail'&&mailZoom!==100){
+    const scale=doc.createElement('style');
+    scale.textContent=`html{zoom:${(mailZoom/100).toFixed(2)}}`;
+    doc.head.append(scale);
+  }
   const custom=sanitizeArticleCss(articleStyle?.customCss||'');
   if(mode==='article'&&custom.trim()){
     const style=doc.createElement('style');style.textContent=custom;doc.head.append(style);

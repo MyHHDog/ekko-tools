@@ -12,7 +12,7 @@ export class RssStore {
     db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS folders(id TEXT PRIMARY KEY,name TEXT NOT NULL,created_at INTEGER NOT NULL,
         sort_order INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE IF NOT EXISTS feeds(id TEXT PRIMARY KEY,url TEXT UNIQUE NOT NULL,title TEXT NOT NULL,
+      CREATE TABLE IF NOT EXISTS feeds(id TEXT PRIMARY KEY,url TEXT UNIQUE NOT NULL,title TEXT NOT NULL,custom_title TEXT,
         site_url TEXT NOT NULL DEFAULT '',description TEXT NOT NULL DEFAULT '',icon TEXT NOT NULL DEFAULT '',
         folder_id TEXT,enabled INTEGER NOT NULL DEFAULT 1,etag TEXT,last_modified TEXT,
         last_fetched_at INTEGER,last_error TEXT,created_at INTEGER NOT NULL,
@@ -34,6 +34,7 @@ export class RssStore {
     // 旧库补列，保留已有订阅与文章数据。
     const columns = new Set((db.prepare('PRAGMA table_info(feeds)').all() as Row[]).map(row => row.name));
     for (const [name, ddl] of [
+      ['custom_title', 'custom_title TEXT'],
       ['failure_count', 'failure_count INTEGER NOT NULL DEFAULT 0'],
       ['next_fetch_at', 'next_fetch_at INTEGER'],
       ['last_status', 'last_status INTEGER'],
@@ -55,6 +56,18 @@ export class RssStore {
   }
   run(sql: string, params: any[] = []) {
     return this.open().prepare(sql).run(...params);
+  }
+  transaction<T>(work: () => T): T {
+    const db = this.open();
+    db.exec('BEGIN');
+    try {
+      const result = work();
+      db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch { /* 保留原始错误。 */ }
+      throw error;
+    }
   }
   exec(sql: string) { this.open().exec(sql); }
   close() { this.db?.close(); this.db = undefined; }

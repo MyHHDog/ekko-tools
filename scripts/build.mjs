@@ -1,14 +1,5 @@
 import {build} from 'esbuild';
-import {readFile} from 'node:fs/promises';
-import {createRequire} from 'node:module';
 import {writeChunks} from './write.mjs';
-const require=createRequire(import.meta.url);
-try{
-  const baseline=await readFile('../design/design-tokens.css','utf8');
-  if(baseline!==await readFile('src/client/styles/design-tokens.css','utf8'))throw Error('上游 token 快照不一致');
-}catch(error){
-  if(error?.code!=='ENOENT')throw error;
-}
 const common={bundle:true,format:'esm',minify:true,write:false,legalComments:'none',target:'es2022'};
 async function output(entry,file,platform,extra={}){
   const result=await build({...common,entryPoints:[entry],platform,...extra});
